@@ -1,15 +1,8 @@
-from __future__ import annotations
-
 import os
 import math
 import tempfile
 import logging
 from typing import Dict, Any, Tuple, List, Optional
-
-# 必须在 import torch 之前设置
-os.environ['PYTORCH_JIT'] = '0'
-os.environ['TORCH_EXTENSIONS_DIR'] = '/tmp/torch_extensions'
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
 
 import cv2
 import numpy as np

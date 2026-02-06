@@ -1,0 +1,100 @@
+[build-system]
+requires = [
+    "setuptools>=61.0",
+    "wheel",
+    "Cython>=0.29.0",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vggt-dpo"
+version = "0.1.0"
+description = "VGGT-DPO: Aligning Video Diffusion Model with Visual Geometry Grounded Reward"
+requires-python = ">=3.8,<3.12"
+readme = "README.md"
+license = {text = "MIT"}
+
+# 核心依赖 - 所有模块都需要的基础库
+dependencies = [
+    "numpy>=1.26.1,<2.0.0",
+    "torch>=2.4.1,<2.5.0",
+    "torchvision>=0.19.1,<0.20.0",
+    "huggingface-hub>=0.26.1",
+    "transformers>=4.57.0",
+    "Pillow>=9.0.0",
+    "opencv-python>=4.5.0",
+    "requests>=2.25.0",
+    "tqdm>=4.60.0",
+    "hydra-core>=1.3.0",
+]
+
+[project.optional-dependencies]
+
+# Caption Generation 模块
+caption = [
+    "qwen_vl_utils>=0.0.14"
+    # transformers 已在核心依赖中
+]
+
+# Metrics Validation 模块
+metrics = [
+    "einops>=0.6.0",
+    "safetensors>=0.3.0",
+    "kornia>=0.6.0",
+]
+
+# Model Training 模块
+training = [
+    "accelerate==1.0.1",
+    "peft==0.15.1",
+    "diffusers==0.30.3",
+    "sentencepiece==0.2.0",
+    "fire==0.7.0",
+    "diffsynth>=0.1.0",
+    "lightning==2.5.1",
+    "tensorboard==2.19.0",
+]
+
+# Gradio Demo 模块
+demo = [
+    "gradio==5.17.1",
+    "viser==0.2.23",
+    "omegaconf>=2.1.0",
+    "scipy>=1.7.0",
+    "onnxruntime>=1.10.0",
+    "trimesh>=3.9.0",
+    "matplotlib>=3.5.0",
+    "pydantic==2.10.6",
+]
+
+# COLMAP 相关（需要额外安装）
+colmap = [
+    "pycolmap==3.10.0",
+    "pyceres==2.3",
+    "lightglue @ git+https://github.com/jytime/LightGlue.git",
+]
+
+# 开发依赖
+dev = [
+    "vggt-dpo[all]",
+    "pytest>=7.0.0",
+    "black>=22.0.0",
+    "flake8>=4.0.0",
+    "ipython>=8.0.0",
+]
+
+# 完整安装 - 所有功能模块（不包括 colmap）
+all = [
+    "vggt-dpo[metrics,training,demo]",
+]
+
+# 完整安装 + COLMAP
+full = [
+    "vggt-dpo[all,colmap]",
+]
+
+[tool.setuptools]
+packages = ["caption", "videogen" ,"metrics", "model_training"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.yml", "*.json"]

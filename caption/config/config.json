@@ -1,0 +1,76 @@
+{
+  "model": {
+    "model_name": "Qwen/Qwen3-VL-8B-Instruct",
+    "dtype": "auto",
+    "use_flash_attention": false
+  },
+  "generation": {
+    "max_new_tokens": 512,
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "do_sample": true
+  },
+  "datasets": {
+    "realestate10k": {
+      "path": "caption/input/real-estate-10k-mini",
+      "video_dir": "videos",
+      "file_extensions": [".mp4", ".avi"]
+    },
+    "gldv2": {
+      "path": "caption/input/gldv2-mini",
+      "image_dir": "images",
+      "file_extensions": [".jpg", ".jpeg", ".png"]
+    }
+  },
+  "output": {
+    "output_dir": "caption/output",
+    "save_format": "json",
+    "indent": 2
+  },
+  "scenes": {
+    "static_indoor": {
+      "dataset": "realestate10k",
+      "num_samples": 256,
+      "is_video": true,
+      "description": "Static indoor scenes with camera movement, no moving objects"
+    },
+    "static_outdoor": {
+      "dataset": "gldv2",
+      "num_samples": 256,
+      "is_video": false,
+      "description": "Static outdoor scenes with camera movement, no moving objects"
+    },
+    "dynamic_indoor": {
+      "dataset": "realestate10k",
+      "num_samples": 256,
+      "is_video": true,
+      "description": "Indoor scenes with static background and moving foreground objects"
+    },
+    "dynamic_outdoor": {
+      "dataset": "gldv2",
+      "num_samples": 256,
+      "is_video": false,
+      "description": "Outdoor scenes with static background and moving foreground objects"
+    }
+  },
+  "camera_movements": [
+    "Pan left",
+    "Pan right",
+    "Push in",
+    "Pull out",
+    "Dolly in",
+    "Dolly out",
+    "Camera tilt",
+    "Crash zoom",
+    "Camera roll"
+  ],
+  "prompts": {
+    "static_indoor": "Describe this indoor scene in detail. Requirements:\n1. The camera performs a {camera_movement} movement through the scene\n2. The scene is completely STATIC - there are NO moving objects, NO people moving, NO animals\n3. All objects in the scene are stationary including furniture, decorations, and any items\n4. Describe the room layout, architectural features, lighting, and interior design\n5. Mention the camera movement: {camera_movement}\n6. Keep the description within 100-150 words\n7. Focus on: room type, furniture arrangement, colors, textures, and spatial composition\n\nGenerate a detailed caption describing this static indoor scene with camera movement.",
+    
+    "static_outdoor": "Describe this outdoor scene in detail. Requirements:\n1. The camera performs a {camera_movement} movement through the scene\n2. The scene is completely STATIC - there are NO moving people, NO moving vehicles, NO animals in motion\n3. All elements are stationary: buildings, landmarks, natural features, parked vehicles\n4. Describe the landscape, architecture, natural elements, and environmental conditions\n5. Mention the camera movement: {camera_movement}\n6. Keep the description within 100-150 words\n7. Focus on: geographical features, architectural structures, weather conditions, and spatial depth\n\nGenerate a detailed caption describing this static outdoor scene with camera movement.",
+    
+    "dynamic_indoor": "Describe this indoor scene with dynamic elements. Requirements:\n1. The camera performs a {camera_movement} movement through the scene\n2. The background/environment is STATIC (walls, furniture, fixtures remain stationary)\n3. There are MOVING OBJECTS in the foreground (people, pets, or movable items)\n4. Clearly distinguish between static background and dynamic foreground elements\n5. Describe both the static room layout AND the moving objects/subjects\n6. Mention the camera movement: {camera_movement}\n7. Keep the description within 100-150 words\n8. Structure: background description + foreground action + camera movement\n\nGenerate a detailed caption describing this scene with static background and dynamic foreground elements.",
+    
+    "dynamic_outdoor": "Describe this outdoor scene with dynamic elements. Requirements:\n1. The camera performs a {camera_movement} movement through the scene\n2. The background/environment is STATIC (buildings, landscape, infrastructure remain stationary)\n3. There are MOVING OBJECTS in the foreground (people, vehicles, animals)\n4. Clearly distinguish between static background and dynamic foreground elements\n5. Describe both the static environment AND the moving subjects\n6. Mention the camera movement: {camera_movement}\n7. Keep the description within 100-150 words\n8. Structure: background description + foreground action + camera movement\n\nGenerate a detailed caption describing this outdoor scene with static background and dynamic foreground elements."
+  }
+}
