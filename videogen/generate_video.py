@@ -273,7 +273,7 @@ class VideoGenerator:
 
 
 # ============================================================================
-# Output Manager
+# Output Manager (MODIFIED)
 # ============================================================================
 
 class OutputManager:
@@ -301,7 +301,12 @@ class OutputManager:
         category: str,
         sample_index: int
     ) -> Path:
-        """Get output path for a video"""
+        """
+        Get output path for a video
+        
+        Each prompt gets its own folder named prompt{global_index:05d}
+        Videos inside are named seed{sample_index:02d}.mp4
+        """
         
         if self.organize_by_category:
             category_dir = self.output_dir / category
@@ -309,9 +314,14 @@ class OutputManager:
         else:
             category_dir = self.output_dir
         
-        # Use global_index in filename for easy tracking
-        filename = f"prompt{global_index:05d}_seed{sample_index:02d}.{self.save_format}"
-        return category_dir / filename
+        # Create prompt-specific folder
+        prompt_folder = category_dir / f"prompt{global_index:05d}"
+        prompt_folder.mkdir(exist_ok=True)
+        
+        # Video filename is just the seed number
+        filename = f"seed{sample_index:02d}.{self.save_format}"
+        
+        return prompt_folder / filename
     
     def save_metadata(
         self,
@@ -321,17 +331,23 @@ class OutputManager:
         results: List[bool],
         seeds: List[int]
     ):
-        """Save metadata for generated videos"""
+        """
+        Save metadata for generated videos
+        
+        Metadata is saved inside the prompt folder as metadata.json
+        """
         
         if not self.processing_config.get('save_metadata', True):
             return
         
         if self.organize_by_category:
-            metadata_dir = self.output_dir / category
+            category_dir = self.output_dir / category
         else:
-            metadata_dir = self.output_dir
+            category_dir = self.output_dir
         
-        metadata_dir.mkdir(exist_ok=True)
+        # Metadata goes inside the prompt folder
+        prompt_folder = category_dir / f"prompt{global_index:05d}"
+        prompt_folder.mkdir(exist_ok=True)
         
         metadata = {
             'global_index': global_index,
@@ -347,10 +363,14 @@ class OutputManager:
             'total_samples': len(results),
             'success_rate': sum(results) / len(results) if results else 0,
             'seeds_used': seeds,
+            'video_files': [
+                f"seed{i:02d}.{self.save_format}" 
+                for i in range(len(results))
+            ],
             'timestamp': datetime.now().isoformat()
         }
         
-        metadata_path = metadata_dir / f"prompt{global_index:05d}_metadata.json"
+        metadata_path = prompt_folder / "metadata.json"
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
 
