@@ -1,0 +1,28 @@
+{
+  "model": {
+    "checkpoint_folder": "videogen/checkpoints/causvid_bidirectional/bidirectional_checkpoint2",
+    "causvid_config_path": "videogen/config/wan_bidirectional_inference.yaml",
+    "model_type": "bidirectional"
+  },
+  "generation": {
+    "frame_num": 21,
+    "height": 60,
+    "width": 104,
+    "fps": 16,
+    "samples_per_prompt": 10,
+    "base_seed_start": 0
+  },
+  "input": {
+    "input_dir": "caption/output",
+    "all_captions_file": "all_captions.json"
+  },
+  "output": {
+    "output_dir": "videogen/output",
+    "save_format": "mp4",
+    "organize_by_category": true
+  },
+  "processing": {
+    "continue_on_error": true,
+    "save_metadata": true
+  }
+}

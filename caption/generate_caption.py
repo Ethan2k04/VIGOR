@@ -69,16 +69,19 @@ class ConfigLoader:
         """Get all available scene types"""
         return list(self.config.get('scenes', {}).keys())
     
-    def get_camera_movements(self) -> List[str]:
-        """Get camera movement options"""
+    def get_camera_movements(self, scene_type: str = None) -> List[str]:
+        """Get camera movement options for specific scene type"""
+        if scene_type:
+            scene_config = self.get_scene_config(scene_type)
+            return scene_config.get('camera_movements', self.config.get('camera_movements', []))
         return self.config.get('camera_movements', [])
     
-    def get_prompt_template(self, scene_type: str) -> str:
-        """Get prompt template for scene type"""
+    def get_prompt_template(self, camera_movement: str) -> str:
+        """Get prompt template for camera movement"""
         prompts = self.config.get('prompts', {})
-        if scene_type not in prompts:
-            raise ValueError(f"Prompt for scene type '{scene_type}' not found")
-        return prompts[scene_type]
+        if camera_movement not in prompts:
+            raise ValueError(f"Prompt for camera movement '{camera_movement}' not found")
+        return prompts[camera_movement]
     
     def update_config(self, updates: Dict[str, Any]):
         """Update configuration values"""
@@ -112,26 +115,26 @@ class PromptManager:
     def __init__(self, config_loader: ConfigLoader):
         self.config_loader = config_loader
     
-    def get_prompt(self, scene_type: str, camera_movement: str = None) -> Tuple[str, str]:
-        """Get formatted prompt for scene type"""
+    def get_prompt(self, camera_movement: str, is_dynamic: bool) -> Tuple[str, str]:
+        """Get formatted prompt for camera movement"""
+        
+        # Resolve camera movement direction if it contains "/"
+        resolved_movement = self._resolve_movement_direction(camera_movement)
         
         # Get prompt template
-        template = self.config_loader.get_prompt_template(scene_type)
+        template = self.config_loader.get_prompt_template(camera_movement)
         
-        # Get camera movement if not provided
-        if camera_movement is None:
-            camera_movements = self.config_loader.get_camera_movements()
-            camera_movement = random.choice(camera_movements)
+        # Replace placeholder with resolved movement
+        prompt = template.replace('{camera_movement}', resolved_movement)
         
-        # Format prompt with camera movement
-        prompt = template.replace('{camera_movement}', camera_movement)
-        
-        return prompt, camera_movement
+        return prompt, resolved_movement
     
-    def get_random_camera_movement(self) -> str:
-        """Get random camera movement"""
-        movements = self.config_loader.get_camera_movements()
-        return random.choice(movements)
+    def _resolve_movement_direction(self, camera_movement: str) -> str:
+        """Resolve camera movement with random direction for movements with '/'"""
+        if '/' in camera_movement:
+            options = camera_movement.split('/')
+            return random.choice(options).strip()
+        return camera_movement
 
 
 # ============================================================================
@@ -156,7 +159,7 @@ class CaptionGenerator:
         # Parse dtype
         dtype_str = model_config.get('dtype', 'auto')
         if dtype_str == 'auto':
-            dtype = torch.bfloat16  # 改为明确指定
+            dtype = torch.bfloat16
         else:
             dtype_map = {
                 'bfloat16': torch.bfloat16,
@@ -165,24 +168,22 @@ class CaptionGenerator:
             }
             dtype = dtype_map.get(dtype_str, torch.bfloat16)
         
-        # Load model WITHOUT device_map (手动移动到GPU)
+        # Load model WITHOUT device_map
         if model_config.get('use_flash_attention', False):
             print("Loading model with flash_attention_2...")
             self.model = Qwen3VLForConditionalGeneration.from_pretrained(
                 model_config['model_name'],
                 dtype=dtype,
                 attn_implementation="flash_attention_2"
-                # 移除 device_map="auto"
             )
         else:
             print("Loading model with default attention...")
             self.model = Qwen3VLForConditionalGeneration.from_pretrained(
                 model_config['model_name'],
                 dtype=dtype
-                # 移除 device_map="auto"
             )
         
-        # 手动移动模型到 GPU
+        # Move model to GPU
         if torch.cuda.is_available():
             self.model = self.model.cuda()
             print(f"Model moved to GPU")
@@ -385,6 +386,7 @@ class CaptionPipeline:
         print(f"Dataset: {scene_config['dataset']}")
         print(f"Target samples: {scene_config['num_samples']}")
         print(f"Description: {scene_config['description']}")
+        print(f"Camera movements: {scene_config['camera_movements']}")
         print(f"{'='*60}\n")
         
         # Get samples
@@ -395,37 +397,47 @@ class CaptionPipeline:
         
         print(f"Found {len(samples)} samples")
         
+        # Get camera movements for this scene type
+        camera_movements = scene_config['camera_movements']
+        is_dynamic = 'dynamic' in scene_type
+        
         # Generate captions
         results = []
         
         for sample_path in tqdm(samples, desc=f"Generating captions for {scene_type}"):
-            # Get prompt with random camera movement
-            prompt, camera_movement = self.prompt_manager.get_prompt(scene_type)
-            
-            # Generate caption
-            try:
-                caption = self.generator.generate_caption(
-                    sample_path,
-                    prompt,
-                    scene_config['is_video']
+            # For each sample, generate captions for all camera movements
+            for camera_movement in camera_movements:
+                # Get prompt
+                prompt, resolved_movement = self.prompt_manager.get_prompt(
+                    camera_movement, 
+                    is_dynamic
                 )
                 
-                result = {
-                    'file_path': sample_path,
-                    'scene_type': scene_type,
-                    'dataset': scene_config['dataset'],
-                    'camera_movement': camera_movement,
-                    'caption': caption,
-                    'is_video': scene_config['is_video']
-                }
-                
-                results.append(result)
-                
-            except Exception as e:
-                print(f"\nError processing {sample_path}: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
+                # Generate caption
+                try:
+                    caption = self.generator.generate_caption(
+                        sample_path,
+                        prompt,
+                        scene_config['is_video']
+                    )
+                    
+                    result = {
+                        'file_path': sample_path,
+                        'scene_type': scene_type,
+                        'dataset': scene_config['dataset'],
+                        'camera_movement': resolved_movement,
+                        'camera_movement_type': camera_movement,  # Original movement type
+                        'caption': caption,
+                        'is_video': scene_config['is_video']
+                    }
+                    
+                    results.append(result)
+                    
+                except Exception as e:
+                    print(f"\nError processing {sample_path} with {camera_movement}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
         
         # Save results
         output_config = self.config_loader.get_output_config()
@@ -440,6 +452,7 @@ class CaptionPipeline:
             )
         
         print(f"\nSaved {len(results)} captions to {output_file}")
+        print(f"  - {len(samples)} scenes × {len(camera_movements)} camera movements")
         
         return results
     
@@ -468,7 +481,7 @@ class CaptionPipeline:
         print(f"\n{'='*60}")
         print(f"All captions generated successfully!")
         print(f"Combined results saved to: {combined_file}")
-        print(f"Total scenes processed: {sum(len(v) for v in all_results.values())}")
+        print(f"Total captions generated: {sum(len(v) for v in all_results.values())}")
         print(f"{'='*60}\n")
         
         return all_results
@@ -564,6 +577,7 @@ def main():
         for st in scene_types:
             scene_config = config_loader.get_scene_config(st)
             print(f"  - {st}: {scene_config['description']}")
+            print(f"    Camera movements: {scene_config['camera_movements']}")
         print()
         return
     
