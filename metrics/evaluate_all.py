@@ -210,10 +210,16 @@ def evaluate_videos(
     
     print(f"Found {total_videos} total videos across {len(category_videos)} categories:")
     for category, videos in category_videos.items():
+        if len(videos) == 0:
+            print(f"  {category}: 0 videos")
+            continue
         prompts = set(v['prompt'] for v in videos)
         prompt_indices = sorted(set(v['prompt_index'] for v in videos))
-        print(f"  {category}: {len(videos)} videos in {len(prompts)} prompts (indices: {prompt_indices[0]}-{prompt_indices[-1]})")
-    
+        if len(prompt_indices) > 0:
+            print(f"  {category}: {len(videos)} videos in {len(prompts)} prompts (indices: {prompt_indices[0]}-{prompt_indices[-1]})")
+        else:
+            print(f"  {category}: {len(videos)} videos in {len(prompts)} prompts")
+
     if start_index is not None or end_index is not None:
         print(f"Filtering: prompt index range [{start_index or 'start'}, {end_index or 'end'}]")
     
