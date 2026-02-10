@@ -48,6 +48,7 @@ metrics = [
     "einops>=0.6.0",
     "safetensors>=0.3.0",
     "kornia>=0.6.0",
+    "lpips>=0.1.4"
 ]
 
 # Model Training 模块

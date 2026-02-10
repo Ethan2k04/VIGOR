@@ -45,12 +45,12 @@ def get_vggt_model() -> VGGT:
     return _VGGT_MODEL
 
 
-print("=" * 60)
+print("=" * 80)
 print("[INFO] Loading VGGT model...")
 model = get_vggt_model()
 print(f"[INFO] Device: {_DEVICE}")
 print("[INFO] ✓ VGGT model loaded successfully")
-print("=" * 60)
+print("=" * 80)
 
 
 class SkySegONNX:
@@ -512,7 +512,6 @@ def select_patches_top_percent(
     top_percent: float,
     max_query_points: int,
     rng: np.random.RandomState,
-    filter_before_select: bool = True,  # 新增参数
 ) -> Tuple[np.ndarray, float, int, int]:
     """
     Select top-K patches by attention value.
@@ -523,8 +522,6 @@ def select_patches_top_percent(
         top_percent: percentage of patches to select
         max_query_points: maximum number of points to return
         rng: random number generator
-        filter_before_select: if True, select from valid patches only (old behavior)
-                             if False, select from all patches, then filter invalid (new behavior)
     
     Returns:
         sel_idx: indices of selected patches
@@ -534,52 +531,27 @@ def select_patches_top_percent(
     """
     N = int(patch_vals.shape[0])
     
-    if filter_before_select:
-        # OLD BEHAVIOR: Select top_percent from valid patches only
-        cand = np.where(valid)[0]
-        if len(cand) == 0:
-            return np.array([], dtype=np.int32), 0.0, 0, 0
-        
-        cand_vals = patch_vals[cand]
-        K = max(1, int(np.ceil(len(cand) * (top_percent / 100.0))))
-        K = min(K, len(cand))
-        K = min(K, max_query_points)
-        
-        if K >= len(cand):
-            thr = float(np.min(cand_vals)) if len(cand_vals) > 0 else 0.0
-            chosen = cand
-        else:
-            part_idx = np.argpartition(cand_vals, -K)[-K:]
-            thr = float(np.min(cand_vals[part_idx]))
-            mask = cand_vals >= thr
-            chosen = cand[mask]
-            if len(chosen) > K:
-                chosen = rng.choice(chosen, size=K, replace=False)
-        
-        return chosen, thr, len(cand), len(chosen)
+    # NEW BEHAVIOR: Select top_percent from ALL patches, then filter invalid
+    # This ensures we actually get top_percent% of total patches (if they're valid)
+    K_target = max(1, int(np.ceil(N * (top_percent / 100.0))))
+    K_target = min(K_target, max_query_points)
     
+    # Select top K patches by attention (regardless of validity)
+    if K_target >= N:
+        thr = float(np.min(patch_vals))
+        top_k_idx = np.arange(N, dtype=np.int32)
     else:
-        # NEW BEHAVIOR: Select top_percent from ALL patches, then filter invalid
-        # This ensures we actually get top_percent% of total patches (if they're valid)
-        K_target = max(1, int(np.ceil(N * (top_percent / 100.0))))
-        K_target = min(K_target, max_query_points)
-        
-        # Select top K patches by attention (regardless of validity)
-        if K_target >= N:
-            thr = float(np.min(patch_vals))
-            top_k_idx = np.arange(N, dtype=np.int32)
-        else:
-            part_idx = np.argpartition(patch_vals, -K_target)[-K_target:]
-            thr = float(np.min(patch_vals[part_idx]))
-            mask = patch_vals >= thr
-            top_k_idx = np.where(mask)[0]
-            if len(top_k_idx) > K_target:
-                top_k_idx = rng.choice(top_k_idx, size=K_target, replace=False)
-        
-        # Now filter by validity
-        chosen = top_k_idx[valid[top_k_idx]]
-        
-        return chosen, thr, int(K_target), len(chosen)
+        part_idx = np.argpartition(patch_vals, -K_target)[-K_target:]
+        thr = float(np.min(patch_vals[part_idx]))
+        mask = patch_vals >= thr
+        top_k_idx = np.where(mask)[0]
+        if len(top_k_idx) > K_target:
+            top_k_idx = rng.choice(top_k_idx, size=K_target, replace=False)
+    
+    # Now filter by validity
+    chosen = top_k_idx[valid[top_k_idx]]
+    
+    return chosen, thr, int(K_target), len(chosen)
 
 
 def patchmap_to_fullres(patch_map: np.ndarray, H: int, W: int, patch: int) -> np.ndarray:
@@ -629,9 +601,8 @@ class ReprojectionEvaluator(BaseEvaluator):
         seed: int = 0,
         save_sampling_mask: bool = False,
         sampling_mask_dir: Optional[str] = None,
-        filter_before_select: bool = False,
     ):  
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 80)
         print("[INFO] Initializing ReprojectionEvaluator...")
         super().__init__(sampling_rate=int(sampling_rate))
 
@@ -641,7 +612,6 @@ class ReprojectionEvaluator(BaseEvaluator):
         self.max_query_points = int(max_query_points)
         self.top_percent = float(top_percent)
         self.track_conf = float(track_conf)
-        self.filter_before_select = bool(filter_before_select)
 
         self.attn_layer = int(attn_layer)
         self.attn_reduce = str(attn_reduce)
@@ -667,7 +637,7 @@ class ReprojectionEvaluator(BaseEvaluator):
         print(f"[INFO] Save sampling mask: {self.save_sampling_mask}")
         if self.save_sampling_mask:
             print(f"[INFO] Sampling mask directory: {self.sampling_mask_dir}")
-        print("=" * 60 + "\n")
+        print("=" * 80 + "\n")
 
     @property
     def name(self) -> str:
@@ -758,7 +728,6 @@ class ReprojectionEvaluator(BaseEvaluator):
                 top_percent=self.top_percent,
                 max_query_points=self.max_query_points,
                 rng=self._rng,
-                filter_before_select=self.filter_before_select,
             )
             thr_list.append(float(thr))
             cand_cnt_list.append(int(cand_cnt))
@@ -879,10 +848,10 @@ class ReprojectionEvaluator(BaseEvaluator):
             attn_reduce=config.get("attn_reduce", "max"),
             attn_topk=config.get("attn_topk", 8),
             enable_sky_onnx=config.get("enable_sky_onnx", True),
-            filter_before_select=config.get("filter_before_select", False),
             sky_onnx_path=config.get("sky_onnx_path", None),
             sky_threshold=config.get("sky_threshold", 32),
             seed=config.get("seed", 0),
             save_sampling_mask=config.get("save_sampling_mask", False),
             sampling_mask_dir=config.get("sampling_mask_dir", None),
         )
+    

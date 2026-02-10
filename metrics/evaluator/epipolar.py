@@ -175,7 +175,7 @@ class EpipolarEvaluator(BaseEvaluator):
             ransac_thresh: RANSAC threshold for fundamental matrix estimation
             min_matches: Minimum number of matches required for valid estimation
         """
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 80)
         print("[INFO] Initializing EpipolarEvaluator...")
         super().__init__(sampling_rate)
         
@@ -191,7 +191,7 @@ class EpipolarEvaluator(BaseEvaluator):
         else:
             raise ValueError(f"Unsupported descriptor type: {descriptor_type}. Choose 'sift' or 'lightglue'")
         
-        print("=" * 60 + "\n")
+        print("=" * 80 + "\n")
 
     def compute_fundamental_matrix(self, pts1: np.ndarray, pts2: np.ndarray):
         """Compute fundamental matrix using Kornia (handles normalization internally)."""
