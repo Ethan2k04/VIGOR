@@ -512,52 +512,74 @@ def select_patches_top_percent(
     top_percent: float,
     max_query_points: int,
     rng: np.random.RandomState,
+    filter_before_select: bool = True,  # 新增参数
 ) -> Tuple[np.ndarray, float, int, int]:
     """
-    Sample ONLY from candidate patches in top attention percentile among valid patches.
-
+    Select top-K patches by attention value.
+    
+    Args:
+        patch_vals: (N,) attention values per patch
+        valid: (N,) bool mask, True if patch is valid
+        top_percent: percentage of patches to select
+        max_query_points: maximum number of points to return
+        rng: random number generator
+        filter_before_select: if True, select from valid patches only (old behavior)
+                             if False, select from all patches, then filter invalid (new behavior)
+    
     Returns:
-      sel_idx: (M,)
-      thr: threshold value
-      cand_cnt: number of candidates
-      kept_k: selected M
+        sel_idx: indices of selected patches
+        threshold: attention threshold used
+        candidate_count: number of candidates before selection
+        kept_count: number of patches after selection
     """
-    top_percent = float(np.clip(top_percent, 0.1, 100.0))
-    keep_ratio = top_percent / 100.0
-
-    max_query_points = int(max_query_points)
-    if max_query_points <= 0:
-        return np.zeros((0,), dtype=np.int64), 0.0, 0, 0
-
-    vals = np.asarray(patch_vals, dtype=np.float64)
-    vmask = np.asarray(valid, dtype=bool)
-
-    idx_valid = np.where(vmask)[0]
-    if idx_valid.size == 0:
-        return np.zeros((0,), dtype=np.int64), 0.0, 0, 0
-
-    vals_valid = vals[idx_valid]
-    q = 1.0 - keep_ratio
-    thr = float(np.quantile(vals_valid, q))
-
-    cand_mask = vmask & (vals >= thr)
-    cand_idx = np.where(cand_mask)[0]
-    cand_cnt = int(cand_idx.size)
-    if cand_cnt == 0:
-        best = idx_valid[int(np.argmax(vals_valid))]
-        return np.array([int(best)], dtype=np.int64), thr, 1, 1
-
-    k = min(max_query_points, cand_cnt)
-
-    w = vals[cand_idx].copy()
-    sw = float(np.sum(w))
-    if (not np.isfinite(sw)) or sw <= 1e-12:
-        sel = rng.choice(cand_idx, size=k, replace=False)
+    N = int(patch_vals.shape[0])
+    
+    if filter_before_select:
+        # OLD BEHAVIOR: Select top_percent from valid patches only
+        cand = np.where(valid)[0]
+        if len(cand) == 0:
+            return np.array([], dtype=np.int32), 0.0, 0, 0
+        
+        cand_vals = patch_vals[cand]
+        K = max(1, int(np.ceil(len(cand) * (top_percent / 100.0))))
+        K = min(K, len(cand))
+        K = min(K, max_query_points)
+        
+        if K >= len(cand):
+            thr = float(np.min(cand_vals)) if len(cand_vals) > 0 else 0.0
+            chosen = cand
+        else:
+            part_idx = np.argpartition(cand_vals, -K)[-K:]
+            thr = float(np.min(cand_vals[part_idx]))
+            mask = cand_vals >= thr
+            chosen = cand[mask]
+            if len(chosen) > K:
+                chosen = rng.choice(chosen, size=K, replace=False)
+        
+        return chosen, thr, len(cand), len(chosen)
+    
     else:
-        w = w / sw
-        sel = rng.choice(cand_idx, size=k, replace=False, p=w)
-
-    return sel.astype(np.int64), thr, cand_cnt, k
+        # NEW BEHAVIOR: Select top_percent from ALL patches, then filter invalid
+        # This ensures we actually get top_percent% of total patches (if they're valid)
+        K_target = max(1, int(np.ceil(N * (top_percent / 100.0))))
+        K_target = min(K_target, max_query_points)
+        
+        # Select top K patches by attention (regardless of validity)
+        if K_target >= N:
+            thr = float(np.min(patch_vals))
+            top_k_idx = np.arange(N, dtype=np.int32)
+        else:
+            part_idx = np.argpartition(patch_vals, -K_target)[-K_target:]
+            thr = float(np.min(patch_vals[part_idx]))
+            mask = patch_vals >= thr
+            top_k_idx = np.where(mask)[0]
+            if len(top_k_idx) > K_target:
+                top_k_idx = rng.choice(top_k_idx, size=K_target, replace=False)
+        
+        # Now filter by validity
+        chosen = top_k_idx[valid[top_k_idx]]
+        
+        return chosen, thr, int(K_target), len(chosen)
 
 
 def patchmap_to_fullres(patch_map: np.ndarray, H: int, W: int, patch: int) -> np.ndarray:
@@ -569,17 +591,17 @@ def patchmap_to_fullres(patch_map: np.ndarray, H: int, W: int, patch: int) -> np
     return full[:H, :W]
 
 
-def save_error_mask(error_mask: np.ndarray, output_path: str):
+def save_sampling_mask(sampling_mask: np.ndarray, mask_path: str) -> None:
     """
-    Save error mask as .npz file.
+    Save binary sampling mask to .npz file.
     
     Args:
-        error_mask: (S, Hp, Wp) array of reprojection errors per patch
-        output_path: Path to save the .npz file
+        sampling_mask: (S, Hp, Wp) bool array, True = selected patch
+        mask_path: Path to save .npz file
     """
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    np.savez_compressed(output_path, error_mask=error_mask)
-    logging.info(f"Saved error mask to: {output_path}")
+    os.makedirs(os.path.dirname(os.path.abspath(mask_path)), exist_ok=True)
+    np.savez_compressed(mask_path, sampling_mask=sampling_mask)
+    logging.info(f"Saved sampling mask to: {mask_path}")
 
 
 class ReprojectionEvaluator(BaseEvaluator):
@@ -605,8 +627,9 @@ class ReprojectionEvaluator(BaseEvaluator):
         sky_onnx_path: Optional[str] = "skyseg.onnx",
         sky_threshold: int = 32,
         seed: int = 0,
-        save_error_mask: bool = False,      # NEW: whether to save error masks
-        error_mask_dir: Optional[str] = None,  # NEW: directory to save error masks
+        save_sampling_mask: bool = False,
+        sampling_mask_dir: Optional[str] = None,
+        filter_before_select: bool = False,
     ):  
         print("\n" + "=" * 60)
         print("[INFO] Initializing ReprojectionEvaluator...")
@@ -618,6 +641,7 @@ class ReprojectionEvaluator(BaseEvaluator):
         self.max_query_points = int(max_query_points)
         self.top_percent = float(top_percent)
         self.track_conf = float(track_conf)
+        self.filter_before_select = bool(filter_before_select)
 
         self.attn_layer = int(attn_layer)
         self.attn_reduce = str(attn_reduce)
@@ -627,8 +651,8 @@ class ReprojectionEvaluator(BaseEvaluator):
         self.sky_threshold = int(sky_threshold)
         self.seed = int(seed)
 
-        self.save_error_mask = bool(save_error_mask)
-        self.error_mask_dir = error_mask_dir
+        self.save_sampling_mask = save_sampling_mask
+        self.sampling_mask_dir = sampling_mask_dir
 
         self._rng = np.random.RandomState(self.seed)
 
@@ -640,9 +664,9 @@ class ReprojectionEvaluator(BaseEvaluator):
             self._skyseg = SkySegONNX(sky_onnx_path)
 
         print(f"[INFO] Sky filtering enabled: {self.enable_sky_onnx}")
-        print(f"[INFO] Save error mask: {self.save_error_mask}")
-        if self.save_error_mask:
-            print(f"[INFO] Error mask directory: {self.error_mask_dir}")
+        print(f"[INFO] Save sampling mask: {self.save_sampling_mask}")
+        if self.save_sampling_mask:
+            print(f"[INFO] Sampling mask directory: {self.sampling_mask_dir}")
         print("=" * 60 + "\n")
 
     @property
@@ -714,8 +738,9 @@ class ReprojectionEvaluator(BaseEvaluator):
         cand_cnt_list: List[int] = []
         keep_cnt_list: List[int] = []
 
-        # NEW: Store error mask per frame (S, Hp, Wp)
-        reproj_err_patch = np.zeros((S, Hp, Wp), dtype=np.float32)
+        # NEW: Store binary sampling mask per frame (S, Hp, Wp)
+        # This mask indicates which patches were selected based on VGGT attention
+        sampling_mask = np.zeros((S, Hp, Wp), dtype=bool)
 
         for i in range(S):
             patch_vals, valid_patch, Hp2, Wp2, _ = attention_to_patch_values(
@@ -733,6 +758,7 @@ class ReprojectionEvaluator(BaseEvaluator):
                 top_percent=self.top_percent,
                 max_query_points=self.max_query_points,
                 rng=self._rng,
+                filter_before_select=self.filter_before_select,
             )
             thr_list.append(float(thr))
             cand_cnt_list.append(int(cand_cnt))
@@ -740,6 +766,14 @@ class ReprojectionEvaluator(BaseEvaluator):
 
             M = int(sel_idx.shape[0])
             total_selected += M
+            
+            # NEW: Mark selected patches in the binary mask
+            if M > 0:
+                # Convert flat indices to 2D patch coordinates
+                patch_y = sel_idx // Wp
+                patch_x = sel_idx % Wp
+                sampling_mask[i, patch_y, patch_x] = True
+            
             if M == 0:
                 continue
 
@@ -759,10 +793,6 @@ class ReprojectionEvaluator(BaseEvaluator):
             valid_ref_center = ~sky_center
 
             ref_finite = np.isfinite(Xw).all(axis=1)
-
-            # NEW: Track errors per point for this reference frame
-            sum_d = np.zeros((M,), dtype=np.float32)
-            sum_cnt = np.zeros((M,), dtype=np.float32)
 
             for j in range(S):
                 if j == i:
@@ -796,23 +826,8 @@ class ReprojectionEvaluator(BaseEvaluator):
                 dv = uv_hat[:, 1] - uv_track[:, 1]
                 d = np.sqrt(du * du + dv * dv).astype(np.float32)  # px
 
-                # Accumulate per-point errors
-                sum_d[ok] += d[ok]
-                sum_cnt[ok] += 1.0
-
                 total_sum_d += float(np.sum(d[ok]))
                 total_used += int(np.sum(ok))
-
-            # NEW: Compute average error per patch for this reference frame
-            err_per_point = np.zeros((M,), dtype=np.float32)
-            has_error = sum_cnt > 0.0
-            err_per_point[has_error] = sum_d[has_error] / sum_cnt[has_error]
-
-            # Map point errors back to patch grid
-            N_all = Hp * Wp
-            patch_flat = np.zeros((N_all,), dtype=np.float32)
-            patch_flat[sel_idx] = err_per_point
-            reproj_err_patch[i] = patch_flat.reshape(Hp, Wp)
 
         mean_err = (total_sum_d / (float(total_used) + eps)) if total_used > 0 else -1.0
 
@@ -840,12 +855,12 @@ class ReprojectionEvaluator(BaseEvaluator):
             "attn_kept_mean": float(np.mean(keep_cnt_list)) if len(keep_cnt_list) else 0.0,
         }
 
-        # NEW: Save error mask if enabled
-        if self.save_error_mask and self.error_mask_dir is not None:
+        # NEW: Save sampling mask if enabled
+        if self.save_sampling_mask and self.sampling_mask_dir is not None:
             video_name = os.path.splitext(os.path.basename(video_path))[0]
-            mask_path = os.path.join(self.error_mask_dir, f"{video_name}_error_mask.npz")
-            save_error_mask(reproj_err_patch, mask_path)
-            result["error_mask_path"] = mask_path
+            mask_path = os.path.join(self.sampling_mask_dir, f"{video_name}_sampling_mask.npz")
+            save_sampling_mask(sampling_mask, mask_path)
+            result["sampling_mask_path"] = mask_path
 
         # main score: lower is better
         return float(mean_err), result
@@ -864,9 +879,10 @@ class ReprojectionEvaluator(BaseEvaluator):
             attn_reduce=config.get("attn_reduce", "max"),
             attn_topk=config.get("attn_topk", 8),
             enable_sky_onnx=config.get("enable_sky_onnx", True),
+            filter_before_select=config.get("filter_before_select", False),
             sky_onnx_path=config.get("sky_onnx_path", None),
             sky_threshold=config.get("sky_threshold", 32),
             seed=config.get("seed", 0),
-            save_error_mask=config.get("save_error_mask", False),
-            error_mask_dir=config.get("error_mask_dir", None),
+            save_sampling_mask=config.get("save_sampling_mask", False),
+            sampling_mask_dir=config.get("sampling_mask_dir", None),
         )

@@ -1,6 +1,7 @@
 """
 Video Evaluation Script for Multiple Metrics
 Evaluates videos in subfolders and generates ranked results for each metric.
+Supports hierarchical folder structure: root/category/promptXXXXX/
 """
 import os
 import re
@@ -34,6 +35,11 @@ METRIC_DIRECTIONS: Dict[str, bool] = {
 
 def setup_logging(log_file: str = 'evaluation.log'):
     """Set up logging configuration."""
+    # Create directory for log file if it doesn't exist
+    log_dir = os.path.dirname(os.path.abspath(log_file))
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+    
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
@@ -44,11 +50,31 @@ def setup_logging(log_file: str = 'evaluation.log'):
     )
 
 
+def set_device(device: str):
+    """Set the device for computation."""
+    import torch
+    if device.startswith("cuda"):
+        if not torch.cuda.is_available():
+            logging.warning(f"CUDA not available, falling back to CPU")
+            device = "cpu"
+        else:
+            # Set CUDA device
+            device_id = int(device.split(":")[-1]) if ":" in device else 0
+            torch.cuda.set_device(device_id)
+            logging.info(f"Using device: {torch.cuda.get_device_name(device_id)} ({device})")
+    else:
+        logging.info(f"Using device: CPU")
+    
+    os.environ["CUDA_VISIBLE_DEVICES"] = device.split(":")[-1] if ":" in device else "0"
+    return device
+
+
 def parse_seed_from_filename(path: str) -> int:
     """
     Best-effort parse seed from filename.
     Examples:
       seed_0.mp4 -> 0
+      seed00.mp4  -> 0
       00012.mp4  -> 12
       sample-seed=37_xxx.mp4 -> 37
     If none found, returns -1.
@@ -63,6 +89,16 @@ def parse_seed_from_filename(path: str) -> int:
     if m2:
         return int(m2.group(1))
     return -1
+
+
+def extract_prompt_index_from_folder(folder_name: str) -> Optional[int]:
+    """
+    Extract prompt index from folder name like 'prompt02048' -> 2048
+    """
+    m = re.search(r"prompt(\d+)", folder_name, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    return None
 
 
 def list_videos(folder: str) -> List[str]:
@@ -85,32 +121,85 @@ def list_videos(folder: str) -> List[str]:
     return videos
 
 
-def list_subfolders(root: str) -> List[str]:
-    """List direct child subfolders under root, sorted by name."""
-    if not os.path.isdir(root):
+def list_prompt_folders_in_category(category_path: str) -> List[Tuple[str, int]]:
+    """
+    List prompt folders in a category directory.
+    Returns list of (folder_path, prompt_index) tuples.
+    """
+    if not os.path.isdir(category_path):
         return []
-    subs: List[str] = []
-    for name in os.listdir(root):
-        p = os.path.join(root, name)
+    
+    folders_with_indices = []
+    for name in os.listdir(category_path):
+        p = os.path.join(category_path, name)
         if os.path.isdir(p):
-            subs.append(p)
-    subs.sort()
-    return subs
+            idx = extract_prompt_index_from_folder(name)
+            if idx is not None:
+                folders_with_indices.append((p, idx))
+    
+    # Sort by prompt index
+    folders_with_indices.sort(key=lambda x: x[1])
+    return folders_with_indices
 
 
-def parse_metrics_arg(metrics_arg: str) -> Optional[List[str]]:
-    """Parse --metrics argument. Return None if user didn't specify."""
-    if not metrics_arg or not metrics_arg.strip():
+def list_all_prompt_folders(input_root: str, categories: Optional[List[str]] = None) -> List[Tuple[str, str, int]]:
+    """
+    List all prompt folders across categories.
+    
+    Args:
+        input_root: Root directory containing category folders
+        categories: List of category names to process (None = auto-detect)
+    
+    Returns:
+        List of (category_name, folder_path, prompt_index) tuples, sorted by category then index
+    """
+    if not os.path.isdir(input_root):
+        raise RuntimeError(f"Input root not found: {input_root}")
+    
+    # Auto-detect categories if not specified
+    if categories is None:
+        categories = []
+        for name in os.listdir(input_root):
+            p = os.path.join(input_root, name)
+            if os.path.isdir(p):
+                categories.append(name)
+        categories.sort()
+    
+    all_folders = []
+    for category in categories:
+        category_path = os.path.join(input_root, category)
+        if not os.path.isdir(category_path):
+            logging.warning(f"Category folder not found: {category_path}")
+            continue
+        
+        prompt_folders = list_prompt_folders_in_category(category_path)
+        for folder_path, prompt_idx in prompt_folders:
+            all_folders.append((category, folder_path, prompt_idx))
+    
+    return all_folders
+
+
+def parse_metrics_list(metrics_cfg: Any) -> Optional[List[str]]:
+    """Parse metrics configuration. Return None if empty."""
+    if metrics_cfg is None or metrics_cfg == "":
         return None
-    items = [x.strip() for x in metrics_arg.split(",") if x.strip()]
-    return items if items else None
+    
+    if isinstance(metrics_cfg, list):
+        items = [str(x).strip() for x in metrics_cfg if str(x).strip()]
+        return items if items else None
+    
+    if isinstance(metrics_cfg, str):
+        items = [x.strip() for x in metrics_cfg.split(",") if x.strip()]
+        return items if items else None
+    
+    return None
 
 
 def make_evaluators_from_config(
     cfg: Dict[str, Any],
     only_metrics: Optional[List[str]] = None,
-    save_error_mask: bool = False,
-    error_mask_dir: Optional[str] = None,
+    save_sampling_mask: bool = False,
+    sampling_mask_dir: Optional[str] = None,
 ) -> Tuple[List[Any], Dict[str, str]]:
     """
     Build evaluator instances for epipolar + reprojection.
@@ -118,8 +207,8 @@ def make_evaluators_from_config(
     Args:
         cfg: Configuration dictionary
         only_metrics: List of metric names to enable (None = enable all)
-        save_error_mask: Whether to save error masks for reprojection metric
-        error_mask_dir: Directory to save error masks
+        save_sampling_mask: Whether to save sampling masks for reprojection metric
+        sampling_mask_dir: Directory to save sampling masks
 
     Returns:
         evaluators: List of instantiated evaluator objects
@@ -150,16 +239,16 @@ def make_evaluators_from_config(
     if want("reprojection_error"):
         try:
             if "reprojection_error" in cfg:
-                # Add error mask saving parameters to config
+                # Add sampling mask saving parameters to config
                 reproj_cfg = cfg["reprojection_error"].copy()
-                reproj_cfg["save_error_mask"] = save_error_mask
-                reproj_cfg["error_mask_dir"] = error_mask_dir
+                reproj_cfg["save_sampling_mask"] = save_sampling_mask
+                reproj_cfg["sampling_mask_dir"] = sampling_mask_dir
                 evaluators.append(ReprojectionEvaluator.from_config(reproj_cfg))
                 logging.info("Initialized ReprojectionEvaluator from config")
             else:
                 evaluators.append(ReprojectionEvaluator(
-                    save_error_mask=save_error_mask,
-                    error_mask_dir=error_mask_dir
+                    save_sampling_mask=save_sampling_mask,
+                    sampling_mask_dir=sampling_mask_dir
                 ))
                 logging.info("Initialized ReprojectionEvaluator with defaults")
         except Exception as e:
@@ -240,62 +329,51 @@ def load_previous_results(output_json: str) -> Dict[str, Dict[str, Any]]:
         return previous
         
     except Exception as e:
-        logging.warning(f"Could not load previous results from {output_json}: {e}")
+        logging.warning(f"Failed to load previous results from {output_json}: {e}")
         return {}
 
 
 def evaluate_one_folder(
     folder: str,
     output_json: str,
-    config_json: str = "",
-    metrics: str = "",
-    resume: bool = True,
-    save_error_mask: bool = False,
+    cfg: Dict[str, Any],
+    only_metrics: Optional[List[str]],
+    resume: bool,
+    save_sampling_mask: bool,
 ) -> None:
     """
-    Evaluate all videos in one folder and write results to output_json.
+    Evaluate all videos in one folder for selected metrics.
     
     Args:
         folder: Input folder containing videos
         output_json: Output JSON file path
-        config_json: Optional config file for evaluator parameters
-        metrics: Comma-separated list of metrics to evaluate
+        cfg: Configuration dictionary
+        only_metrics: List of metric names to enable
         resume: Whether to resume from previous results
-        save_error_mask: Whether to save error masks for reprojection metric
+        save_sampling_mask: Whether to save sampling masks
     """
-    logging.info(f"Processing folder: {folder}")
-    
     # List videos
     videos = list_videos(folder)
     if len(videos) == 0:
-        raise RuntimeError(f"No videos found in: {folder}")
+        logging.warning(f"No videos found in: {folder}")
+        return
     
     logging.info(f"Found {len(videos)} videos")
     
-    # Load config
-    cfg: Dict[str, Any] = {}
-    if config_json and os.path.exists(config_json):
-        with open(config_json, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        logging.info(f"Loaded config from {config_json}")
-    
-    # Parse metrics to evaluate
-    only_metrics = parse_metrics_arg(metrics)
-    
-    # Setup error mask directory (same parent as output JSON)
-    error_mask_dir = None
-    if save_error_mask:
+    # Setup sampling mask directory if enabled
+    sampling_mask_dir = None
+    if save_sampling_mask:
+        # Create output directory
         output_dir = os.path.dirname(os.path.abspath(output_json))
-        error_mask_dir = os.path.join(output_dir, "error_masks")
-        os.makedirs(error_mask_dir, exist_ok=True)
-        logging.info(f"Error masks will be saved to: {error_mask_dir}")
+        os.makedirs(output_dir, exist_ok=True)
+        sampling_mask_dir = output_dir  # Save masks in the same prompt folder
     
     # Initialize evaluators
     evaluators, skipped = make_evaluators_from_config(
         cfg, 
         only_metrics=only_metrics,
-        save_error_mask=save_error_mask,
-        error_mask_dir=error_mask_dir,
+        save_sampling_mask=save_sampling_mask,
+        sampling_mask_dir=sampling_mask_dir,
     )
     
     if len(evaluators) == 0:
@@ -365,18 +443,18 @@ def evaluate_one_folder(
         
         # Save intermediate results periodically
         if processed_count > 0 and processed_count % 10 == 0:
-            save_results(folder, videos, enabled_names, skipped, results, output_json, save_error_mask, error_mask_dir)
+            save_results(folder, videos, enabled_names, skipped, results, output_json, save_sampling_mask, sampling_mask_dir)
             logging.info(f"Saved intermediate results ({processed_count} evaluations)")
     
     pbar.close()
     
     # Final save
-    save_results(folder, videos, enabled_names, skipped, results, output_json, save_error_mask, error_mask_dir)
+    save_results(folder, videos, enabled_names, skipped, results, output_json, save_sampling_mask, sampling_mask_dir)
     
     logging.info(f"Completed: {processed_count} evaluations, {skipped_count} skipped")
     logging.info(f"Results saved to: {output_json}")
-    if save_error_mask and error_mask_dir:
-        logging.info(f"Error masks saved to: {error_mask_dir}")
+    if save_sampling_mask and sampling_mask_dir:
+        logging.info(f"Sampling masks saved to: {sampling_mask_dir}")
 
 
 def save_results(
@@ -386,8 +464,8 @@ def save_results(
     skipped: Dict[str, str],
     results: Dict[str, List[Dict[str, Any]]],
     output_json: str,
-    save_error_mask: bool = False,
-    error_mask_dir: Optional[str] = None,
+    save_sampling_mask: bool = False,
+    sampling_mask_dir: Optional[str] = None,
 ) -> None:
     """Save evaluation results to JSON file."""
     # Sort results by metric
@@ -405,16 +483,16 @@ def save_results(
         "ranked": ranked,
     }
     
-    # Add error mask info if enabled
-    if save_error_mask and error_mask_dir:
-        output_data["error_mask_dir"] = os.path.abspath(error_mask_dir)
-        output_data["error_mask_format"] = "npz"
-        output_data["error_mask_info"] = {
-            "description": "Reprojection error masks stored as .npz files",
-            "array_name": "error_mask",
+    # Add sampling mask info if enabled
+    if save_sampling_mask and sampling_mask_dir:
+        output_data["sampling_mask_dir"] = os.path.abspath(sampling_mask_dir)
+        output_data["sampling_mask_format"] = "npz"
+        output_data["sampling_mask_info"] = {
+            "description": "Binary sampling masks indicating selected patches based on VGGT attention",
+            "array_name": "sampling_mask",
             "shape": "(S, Hp, Wp) - frames x patch_height x patch_width",
-            "dtype": "float32",
-            "unit": "pixels",
+            "dtype": "bool",
+            "values": "True = selected patch, False = not selected",
         }
     
     # Ensure output directory exists
@@ -425,89 +503,160 @@ def save_results(
         json.dump(output_data, f, indent=2, ensure_ascii=False)
 
 
+def load_config(config_path: str) -> Dict[str, Any]:
+    """Load configuration from JSON file."""
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    
+    return cfg
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Evaluate videos in subfolders for multiple metrics",
+        description="Evaluate videos in hierarchical prompt folders (root/category/promptXXXXX/) for multiple metrics",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument(
-        "--input_root",
+        "--config",
         type=str,
-        default="input/static",
-        help="Root folder containing subfolders to evaluate",
+        default="config.json",
+        help="Path to configuration JSON file",
     )
     parser.add_argument(
-        "--output_root",
-        type=str,
-        default="output/static",
-        help="Root folder to write JSON results",
+        "--start_index",
+        type=int,
+        default=None,
+        help="Start prompt index (inclusive). Process prompts from this index onwards.",
     )
     parser.add_argument(
-        "--config_json",
-        type=str,
-        default="",
-        help="Optional path to a JSON config controlling evaluator params",
+        "--end_index",
+        type=int,
+        default=None,
+        help="End prompt index (inclusive). Process prompts up to and including this index.",
     )
     parser.add_argument(
-        "--metrics",
+        '--device',
         type=str,
-        default="",
-        help="Comma-separated metric names: epipolar_consistency,reprojection_error (empty = all)",
+        default='cuda:0',
+        help='GPU device to use (e.g., cuda:0, cuda:1, or cpu). Default: cuda:0'
     )
     parser.add_argument(
-        "--output_suffix",
+        "--categories",
         type=str,
-        default="metrics.json",
-        help="Output JSON filename under each output folder",
+        default=None,
+        help="Comma-separated list of categories to process (overrides config). E.g., 'static_indoor,dynamic_indoor'",
     )
     parser.add_argument(
         "--log_file",
         type=str,
-        default="evaluation.log",
-        help="Log file path",
-    )
-    parser.add_argument(
-        "--no_resume",
-        action="store_true",
-        help="Disable resuming from previous results",
-    )
-    parser.add_argument(
-        "--save_error_mask",
-        action="store_true",
-        help="Save error masks for reprojection metric (stored as .npz in error_masks/ subfolder)",
+        default=None,
+        help="Log file path (default: evaluation.log in output_root)",
     )
     
     args = parser.parse_args()
     
+    # Load configuration
+    cfg = load_config(args.config)
+    
+    # Extract settings from config
+    input_root = cfg.get("input_root", "output")
+    output_root = cfg.get("output_root", "output_metrics")
+    
+    # Categories: command line > config > auto-detect
+    if args.categories:
+        categories = [x.strip() for x in args.categories.split(",") if x.strip()]
+    else:
+        categories = cfg.get("categories", None)
+    
+    metrics_cfg = cfg.get("metrics", None)
+    save_sampling_mask = cfg.get("save_sampling_mask", False)
+    output_suffix = cfg.get("output_suffix", "metrics.json")
+    resume = cfg.get("resume", True)
+    
+    # Parse metrics
+    only_metrics = parse_metrics_list(metrics_cfg)
+    
+    # Setup device
+    device = args.device
+    set_device(device)
+    
     # Setup logging
-    setup_logging(args.log_file)
+    if args.log_file is None:
+        log_file = os.path.join(output_root, "evaluation.log")
+    else:
+        log_file = args.log_file
+    
+    setup_logging(log_file)
+    
     logging.info("=" * 80)
     logging.info("Starting video evaluation")
-    logging.info(f"Input root: {args.input_root}")
-    logging.info(f"Output root: {args.output_root}")
-    logging.info(f"Config: {args.config_json or 'None'}")
-    logging.info(f"Metrics: {args.metrics or 'All'}")
-    logging.info(f"Resume: {not args.no_resume}")
-    logging.info(f"Save error masks: {args.save_error_mask}")
+    logging.info(f"Config file: {args.config}")
+    logging.info(f"Input root: {input_root}")
+    logging.info(f"Output root: {output_root}")
+    logging.info(f"Categories: {categories or 'Auto-detect'}")
+    logging.info(f"Device: {device}")
+    logging.info(f"Metrics: {only_metrics or 'All'}")
+    logging.info(f"Save sampling masks: {save_sampling_mask}")
+    logging.info(f"Resume: {resume}")
+    
+    if args.start_index is not None or args.end_index is not None:
+        logging.info(f"Prompt index range: [{args.start_index or 'start'}, {args.end_index or 'end'}]")
+    
     logging.info("=" * 80)
     
-    # List subfolders
-    subfolders = list_subfolders(args.input_root)
-    if len(subfolders) == 0:
-        raise RuntimeError(f"No subfolders found under: {args.input_root}")
+    # List all prompt folders across categories
+    all_folders = list_all_prompt_folders(input_root, categories)
+    if len(all_folders) == 0:
+        raise RuntimeError(f"No prompt folders found under: {input_root}")
     
-    logging.info(f"Found {len(subfolders)} subfolders to process")
+    # Filter by index range if specified
+    filtered_folders = []
+    for category, folder_path, prompt_idx in all_folders:
+        # Check index range
+        if args.start_index is not None and prompt_idx < args.start_index:
+            continue
+        if args.end_index is not None and prompt_idx > args.end_index:
+            continue
+        
+        filtered_folders.append((category, folder_path, prompt_idx))
     
-    # Process each subfolder
-    for idx, folder in enumerate(subfolders, 1):
-        name = os.path.basename(folder.rstrip("/"))
-        out_dir = os.path.join(args.output_root, name)
-        out_json = os.path.join(out_dir, args.output_suffix)
+    if len(filtered_folders) == 0:
+        if args.start_index is not None or args.end_index is not None:
+            raise RuntimeError(
+                f"No prompt folders found in index range "
+                f"[{args.start_index or 'start'}, {args.end_index or 'end'}]"
+            )
+        else:
+            raise RuntimeError(f"No valid prompt folders found under: {input_root}")
+    
+    logging.info(f"Found {len(all_folders)} total prompt folders across all categories")
+    logging.info(f"Processing {len(filtered_folders)} folders after filtering")
+    
+    # Group by category for summary
+    category_counts = {}
+    for category, _, _ in filtered_folders:
+        category_counts[category] = category_counts.get(category, 0) + 1
+    
+    logging.info("Folders per category:")
+    for category, count in sorted(category_counts.items()):
+        logging.info(f"  - {category}: {count} folders")
+    
+    # Process each filtered folder
+    for idx, (category, folder, prompt_idx) in enumerate(filtered_folders, 1):
+        folder_name = os.path.basename(folder.rstrip("/"))
+        
+        # Create output directory: output_root/category/promptXXXXX/
+        out_dir = os.path.join(output_root, category, f"prompt{prompt_idx:05d}")
+        out_json = os.path.join(out_dir, output_suffix)
         
         logging.info("")
         logging.info("=" * 80)
-        logging.info(f"[{idx}/{len(subfolders)}] Evaluating: {name}")
+        logging.info(f"[{idx}/{len(filtered_folders)}] Evaluating: {category}/{folder_name} (index: {prompt_idx})")
         logging.info(f"Input folder : {folder}")
+        logging.info(f"Output folder: {out_dir}")
         logging.info(f"Output JSON  : {out_json}")
         logging.info("=" * 80)
         
@@ -515,18 +664,19 @@ def main():
             evaluate_one_folder(
                 folder=folder,
                 output_json=out_json,
-                config_json=args.config_json,
-                metrics=args.metrics,
-                resume=not args.no_resume,
-                save_error_mask=args.save_error_mask,
+                cfg=cfg,
+                only_metrics=only_metrics,
+                resume=resume,
+                save_sampling_mask=save_sampling_mask,
             )
         except Exception as e:
-            logging.error(f"Failed to process {name}: {e}", exc_info=True)
+            logging.error(f"Failed to process {category}/{folder_name}: {e}", exc_info=True)
             continue
     
     logging.info("")
     logging.info("=" * 80)
     logging.info("All evaluations finished!")
+    logging.info(f"Results saved to: {output_root}")
     logging.info("=" * 80)
 
 

@@ -1,6 +1,6 @@
 """
-Error Mask Visualization Tool
-Visualize reprojection error masks saved as .npz files
+Sampling Mask Visualization Tool
+Visualize binary sampling masks showing which patches were selected based on VGGT attention
 """
 import os
 import numpy as np
@@ -9,12 +9,12 @@ import cv2
 from typing import List, Tuple, Optional
 
 
-def load_error_mask(npz_file) -> Tuple[Optional[np.ndarray], str]:
+def load_sampling_mask(npz_file) -> Tuple[Optional[np.ndarray], str]:
     """
-    Load error mask from .npz file.
+    Load sampling mask from .npz file.
     
     Returns:
-        error_mask: (S, Hp, Wp) array or None if failed
+        sampling_mask: (S, Hp, Wp) bool array or None if failed
         info_text: Information about the loaded mask
     """
     if npz_file is None:
@@ -30,97 +30,77 @@ def load_error_mask(npz_file) -> Tuple[Optional[np.ndarray], str]:
         # Load .npz file
         data = np.load(file_path)
         
-        if "error_mask" not in data:
+        if "sampling_mask" not in data:
             available_keys = list(data.keys())
-            return None, f"Error: 'error_mask' key not found. Available keys: {available_keys}"
+            return None, f"Error: 'sampling_mask' key not found. Available keys: {available_keys}"
         
-        error_mask = data["error_mask"]
+        sampling_mask = data["sampling_mask"]
         
         # Validate shape
-        if error_mask.ndim != 3:
-            return None, f"Error: Expected 3D array (S, Hp, Wp), got shape {error_mask.shape}"
+        if sampling_mask.ndim != 3:
+            return None, f"Error: Expected 3D array (S, Hp, Wp), got shape {sampling_mask.shape}"
         
-        S, Hp, Wp = error_mask.shape
+        S, Hp, Wp = sampling_mask.shape
         
         # Compute statistics
-        valid_mask = np.isfinite(error_mask) & (error_mask >= 0)
-        valid_errors = error_mask[valid_mask]
+        total_patches = S * Hp * Wp
+        selected_patches = int(np.sum(sampling_mask))
+        selection_rate = (selected_patches / total_patches * 100) if total_patches > 0 else 0.0
         
-        if valid_errors.size > 0:
-            mean_err = float(np.mean(valid_errors))
-            max_err = float(np.max(valid_errors))
-            min_err = float(np.min(valid_errors))
-            std_err = float(np.std(valid_errors))
-            median_err = float(np.median(valid_errors))
-        else:
-            mean_err = max_err = min_err = std_err = median_err = 0.0
+        # Per-frame statistics
+        selected_per_frame = np.sum(sampling_mask, axis=(1, 2))
+        mean_selected = float(np.mean(selected_per_frame))
+        min_selected = int(np.min(selected_per_frame))
+        max_selected = int(np.max(selected_per_frame))
         
         info = (
-            f"✓ Successfully loaded error mask\n"
+            f"✓ Successfully loaded sampling mask\n"
             f"File: {os.path.basename(file_path)}\n"
             f"Shape: {S} frames × {Hp}×{Wp} patches\n"
-            f"Valid patches: {valid_errors.size:,} / {error_mask.size:,}\n"
+            f"Total patches: {total_patches:,}\n"
+            f"Selected patches: {selected_patches:,} ({selection_rate:.2f}%)\n"
             f"\n"
-            f"Statistics (pixels):\n"
-            f"  Mean:   {mean_err:.4f}\n"
-            f"  Median: {median_err:.4f}\n"
-            f"  Std:    {std_err:.4f}\n"
-            f"  Min:    {min_err:.4f}\n"
-            f"  Max:    {max_err:.4f}\n"
+            f"Per-frame statistics:\n"
+            f"  Mean selected: {mean_selected:.1f}\n"
+            f"  Min selected:  {min_selected}\n"
+            f"  Max selected:  {max_selected}\n"
+            f"\n"
+            f"Interpretation:\n"
+            f"  True (white) = Selected patch (high attention)\n"
+            f"  False (black) = Not selected patch\n"
         )
         
-        return error_mask, info
+        return sampling_mask, info
         
     except Exception as e:
         return None, f"Error loading file: {str(e)}"
 
 
-def error_to_heatmap(
-    error_2d: np.ndarray, 
-    vmin: Optional[float] = None, 
-    vmax: Optional[float] = None,
-    colormap: int = cv2.COLORMAP_JET
+def mask_to_heatmap(
+    mask_2d: np.ndarray,
+    selected_color: Tuple[int, int, int] = (0, 255, 0),  # Green for selected
+    unselected_color: Tuple[int, int, int] = (50, 50, 50),  # Dark gray for unselected
 ) -> np.ndarray:
     """
-    Convert 2D error map to RGB heatmap.
+    Convert 2D binary mask to RGB visualization.
     
     Args:
-        error_2d: (H, W) error values
-        vmin: Minimum value for colormap (None = auto)
-        vmax: Maximum value for colormap (None = auto)
-        colormap: OpenCV colormap constant
+        mask_2d: (H, W) bool array
+        selected_color: RGB color for True patches
+        unselected_color: RGB color for False patches
     
     Returns:
         heatmap_rgb: (H, W, 3) RGB uint8 heatmap
     """
-    error_2d = np.asarray(error_2d, dtype=np.float32)
+    mask_2d = np.asarray(mask_2d, dtype=bool)
+    H, W = mask_2d.shape
     
-    # Handle invalid values
-    valid_mask = np.isfinite(error_2d) & (error_2d >= 0)
+    # Create RGB image
+    heatmap_rgb = np.zeros((H, W, 3), dtype=np.uint8)
     
-    if vmin is None:
-        vmin = float(np.min(error_2d[valid_mask])) if valid_mask.any() else 0.0
-    if vmax is None:
-        vmax = float(np.max(error_2d[valid_mask])) if valid_mask.any() else 1.0
-    
-    # Avoid division by zero
-    if vmax <= vmin:
-        vmax = vmin + 1e-6
-    
-    # Normalize to [0, 255]
-    normalized = np.zeros_like(error_2d, dtype=np.float32)
-    normalized[valid_mask] = (error_2d[valid_mask] - vmin) / (vmax - vmin)
-    normalized = np.clip(normalized * 255.0, 0, 255).astype(np.uint8)
-    
-    # Mark invalid regions as black
-    normalized[~valid_mask] = 0
-    
-    # Apply colormap
-    heatmap_bgr = cv2.applyColorMap(normalized, colormap)
-    heatmap_rgb = cv2.cvtColor(heatmap_bgr, cv2.COLOR_BGR2RGB)
-    
-    # Make invalid regions gray
-    heatmap_rgb[~valid_mask] = [50, 50, 50]
+    # Set colors
+    heatmap_rgb[mask_2d] = selected_color
+    heatmap_rgb[~mask_2d] = unselected_color
     
     return heatmap_rgb
 
@@ -149,12 +129,10 @@ def upsample_patch_to_image(
         raise ValueError(f"Unexpected patch_map shape: {patch_map.shape}")
 
 
-def visualize_error_masks(
+def visualize_sampling_masks(
     npz_file,
     frame_idx: int,
-    vmin: float,
-    vmax: float,
-    colormap_choice: str,
+    selected_color_choice: str,
     upscale_factor: int,
     show_grid: bool,
 ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], str]:
@@ -166,45 +144,32 @@ def visualize_error_masks(
         upscaled_heatmap: Upscaled heatmap
         info_text: Information text
     """
-    error_mask, info = load_error_mask(npz_file)
+    sampling_mask, info = load_sampling_mask(npz_file)
     
-    if error_mask is None:
+    if sampling_mask is None:
         return None, None, info
     
-    S, Hp, Wp = error_mask.shape
+    S, Hp, Wp = sampling_mask.shape
     
     # Validate frame index
     frame_idx = int(frame_idx)
     if frame_idx < 0 or frame_idx >= S:
         frame_idx = min(max(0, frame_idx), S - 1)
     
-    # Get error map for selected frame
-    error_2d = error_mask[frame_idx]  # (Hp, Wp)
+    # Get mask for selected frame
+    mask_2d = sampling_mask[frame_idx]  # (Hp, Wp) bool
     
-    # Choose colormap
-    colormap_dict = {
-        "JET": cv2.COLORMAP_JET,
-        "HOT": cv2.COLORMAP_HOT,
-        "VIRIDIS": cv2.COLORMAP_VIRIDIS,
-        "PLASMA": cv2.COLORMAP_PLASMA,
-        "INFERNO": cv2.COLORMAP_INFERNO,
-        "MAGMA": cv2.COLORMAP_MAGMA,
-        "TURBO": cv2.COLORMAP_TURBO,
+    # Choose color scheme
+    color_schemes = {
+        "Green/Gray": ((0, 255, 0), (50, 50, 50)),
+        "White/Black": ((255, 255, 255), (0, 0, 0)),
+        "Yellow/Blue": ((255, 255, 0), (0, 0, 128)),
+        "Red/Gray": ((255, 0, 0), (50, 50, 50)),
     }
-    colormap = colormap_dict.get(colormap_choice, cv2.COLORMAP_JET)
-    
-    # Auto-range if vmin >= vmax
-    if vmin >= vmax:
-        valid_mask = np.isfinite(error_2d) & (error_2d >= 0)
-        if valid_mask.any():
-            vmin = float(np.min(error_2d[valid_mask]))
-            vmax = float(np.max(error_2d[valid_mask]))
-        else:
-            vmin = 0.0
-            vmax = 1.0
+    selected_color, unselected_color = color_schemes.get(selected_color_choice, ((0, 255, 0), (50, 50, 50)))
     
     # Create patch-level heatmap
-    patch_heatmap = error_to_heatmap(error_2d, vmin=vmin, vmax=vmax, colormap=colormap)
+    patch_heatmap = mask_to_heatmap(mask_2d, selected_color=selected_color, unselected_color=unselected_color)
     
     # Add grid overlay if requested
     if show_grid and min(Hp, Wp) <= 200:  # Only show grid for reasonable sizes
@@ -230,36 +195,24 @@ def visualize_error_masks(
     )
     
     # Update info with frame-specific stats
-    valid_mask = np.isfinite(error_2d) & (error_2d >= 0)
-    valid_errors = error_2d[valid_mask]
+    num_selected = int(np.sum(mask_2d))
+    total_patches = Hp * Wp
+    selection_rate = (num_selected / total_patches * 100) if total_patches > 0 else 0.0
     
     frame_info = info + (
         f"\n"
         f"Frame {frame_idx} statistics:\n"
-        f"  Valid patches: {valid_errors.size} / {error_2d.size}\n"
-    )
-    
-    if valid_errors.size > 0:
-        frame_info += (
-            f"  Mean:   {np.mean(valid_errors):.4f} px\n"
-            f"  Median: {np.median(valid_errors):.4f} px\n"
-            f"  Max:    {np.max(valid_errors):.4f} px\n"
-        )
-    
-    frame_info += (
+        f"  Selected patches: {num_selected} / {total_patches} ({selection_rate:.2f}%)\n"
         f"\n"
-        f"Colormap range: [{vmin:.2f}, {vmax:.2f}] px\n"
         f"Upscale factor: {upscale_factor}× → {target_w}×{target_h} px"
     )
     
     return patch_heatmap, upscaled_heatmap, frame_info
 
 
-def create_error_mask_gallery(
+def create_sampling_mask_gallery(
     npz_file,
-    vmin: float,
-    vmax: float,
-    colormap_choice: str,
+    selected_color_choice: str,
     max_frames: int,
 ) -> Tuple[List[Tuple[np.ndarray, str]], str]:
     """
@@ -269,12 +222,12 @@ def create_error_mask_gallery(
         gallery_images: List of (image, caption) tuples
         info_text: Information text
     """
-    error_mask, info = load_error_mask(npz_file)
+    sampling_mask, info = load_sampling_mask(npz_file)
     
-    if error_mask is None:
+    if sampling_mask is None:
         return [], info
     
-    S, Hp, Wp = error_mask.shape
+    S, Hp, Wp = sampling_mask.shape
     
     # Limit number of frames to display
     max_frames = int(max_frames)
@@ -284,34 +237,21 @@ def create_error_mask_gallery(
     else:
         frame_indices = np.arange(S)
     
-    # Choose colormap
-    colormap_dict = {
-        "JET": cv2.COLORMAP_JET,
-        "HOT": cv2.COLORMAP_HOT,
-        "VIRIDIS": cv2.COLORMAP_VIRIDIS,
-        "PLASMA": cv2.COLORMAP_PLASMA,
-        "INFERNO": cv2.COLORMAP_INFERNO,
-        "MAGMA": cv2.COLORMAP_MAGMA,
-        "TURBO": cv2.COLORMAP_TURBO,
+    # Choose color scheme
+    color_schemes = {
+        "Green/Gray": ((0, 255, 0), (50, 50, 50)),
+        "White/Black": ((255, 255, 255), (0, 0, 0)),
+        "Yellow/Blue": ((255, 255, 0), (0, 0, 128)),
+        "Red/Gray": ((255, 0, 0), (50, 50, 50)),
     }
-    colormap = colormap_dict.get(colormap_choice, cv2.COLORMAP_JET)
-    
-    # Auto-range if needed
-    if vmin >= vmax:
-        valid_mask = np.isfinite(error_mask) & (error_mask >= 0)
-        if valid_mask.any():
-            vmin = float(np.min(error_mask[valid_mask]))
-            vmax = float(np.max(error_mask[valid_mask]))
-        else:
-            vmin = 0.0
-            vmax = 1.0
+    selected_color, unselected_color = color_schemes.get(selected_color_choice, ((0, 255, 0), (50, 50, 50)))
     
     # Create gallery
     gallery_images = []
     
     for idx in frame_indices:
-        error_2d = error_mask[idx]
-        heatmap = error_to_heatmap(error_2d, vmin=vmin, vmax=vmax, colormap=colormap)
+        mask_2d = sampling_mask[idx]
+        heatmap = mask_to_heatmap(mask_2d, selected_color=selected_color, unselected_color=unselected_color)
         
         # Upscale for better visibility
         upscale = max(1, 512 // max(Hp, Wp))
@@ -322,31 +262,31 @@ def create_error_mask_gallery(
         )
         
         # Compute frame stats
-        valid = np.isfinite(error_2d) & (error_2d >= 0)
-        if valid.any():
-            mean_err = np.mean(error_2d[valid])
-            max_err = np.max(error_2d[valid])
-        else:
-            mean_err = max_err = 0.0
+        num_selected = int(np.sum(mask_2d))
+        total_patches = Hp * Wp
+        selection_rate = (num_selected / total_patches * 100) if total_patches > 0 else 0.0
         
-        caption = f"Frame {idx} | Mean: {mean_err:.3f}px | Max: {max_err:.3f}px"
+        caption = f"Frame {idx} | Selected: {num_selected}/{total_patches} ({selection_rate:.1f}%)"
         gallery_images.append((heatmap_up, caption))
     
     return gallery_images, info
 
 
 # Build Gradio interface
-with gr.Blocks(title="Error Mask Visualizer") as demo:
+with gr.Blocks(title="Sampling Mask Visualizer") as demo:
     gr.Markdown(
         """
-        # 🔥 Reprojection Error Mask Visualizer
+        # 🎯 VGGT Attention-Based Sampling Mask Visualizer
         
-        Upload an `.npz` error mask file generated by the evaluation script to visualize reprojection errors.
+        Upload an `.npz` sampling mask file to visualize which patches were selected based on VGGT global attention.
         
-        **File format**: `.npz` with `error_mask` key containing `(S, Hp, Wp)` array
+        **File format**: `.npz` with `sampling_mask` key containing `(S, Hp, Wp)` bool array
         - S: Number of frames
         - Hp, Wp: Patch grid dimensions
-        - Values: Reprojection error in pixels
+        - Values: True = selected patch (high attention), False = not selected
+        
+        **According to the paper**: This binary mask represents the geometry-aware sampling strategy,
+        where patches are selected based on the top N% of VGGT global attention scores.
         """
     )
     
@@ -354,33 +294,17 @@ with gr.Blocks(title="Error Mask Visualizer") as demo:
         with gr.Column(scale=1):
             # File upload
             npz_input = gr.File(
-                label="Upload Error Mask (.npz)",
+                label="Upload Sampling Mask (.npz)",
                 file_types=[".npz"],
                 type="filepath"
             )
             
             gr.Markdown("### Visualization Settings")
             
-            with gr.Row():
-                vmin_slider = gr.Slider(
-                    minimum=0.0,
-                    maximum=50.0,
-                    value=0.0,
-                    step=0.1,
-                    label="Color Range Min (px)",
-                )
-                vmax_slider = gr.Slider(
-                    minimum=0.1,
-                    maximum=100.0,
-                    value=20.0,
-                    step=0.1,
-                    label="Color Range Max (px)",
-                )
-            
-            colormap_choice = gr.Dropdown(
-                choices=["JET", "HOT", "VIRIDIS", "PLASMA", "INFERNO", "MAGMA", "TURBO"],
-                value="JET",
-                label="Colormap",
+            color_choice = gr.Dropdown(
+                choices=["Green/Gray", "White/Black", "Yellow/Blue", "Red/Gray"],
+                value="Green/Gray",
+                label="Color Scheme (Selected/Unselected)",
             )
             
             gr.Markdown("### Single Frame View")
@@ -431,18 +355,18 @@ with gr.Blocks(title="Error Mask Visualizer") as demo:
             
             with gr.Row():
                 patch_output = gr.Image(
-                    label="Patch-Level Heatmap (Original)",
+                    label="Patch-Level Mask (Original)",
                     type="numpy",
                 )
                 upscaled_output = gr.Image(
-                    label="Upscaled Heatmap",
+                    label="Upscaled Mask",
                     type="numpy",
                 )
             
             gr.Markdown("### Gallery View (All Frames)")
             
             gallery_output = gr.Gallery(
-                label="Error Mask Gallery",
+                label="Sampling Mask Gallery",
                 columns=4,
                 rows=3,
                 height=600,
@@ -451,19 +375,17 @@ with gr.Blocks(title="Error Mask Visualizer") as demo:
     
     # Event handlers
     npz_input.change(
-        fn=load_error_mask,
+        fn=load_sampling_mask,
         inputs=[npz_input],
         outputs=[gr.State(), info_text],
     )
     
     visualize_btn.click(
-        fn=visualize_error_masks,
+        fn=visualize_sampling_masks,
         inputs=[
             npz_input,
             frame_idx_slider,
-            vmin_slider,
-            vmax_slider,
-            colormap_choice,
+            color_choice,
             upscale_slider,
             show_grid_check,
         ],
@@ -471,12 +393,10 @@ with gr.Blocks(title="Error Mask Visualizer") as demo:
     )
     
     gallery_btn.click(
-        fn=create_error_mask_gallery,
+        fn=create_sampling_mask_gallery,
         inputs=[
             npz_input,
-            vmin_slider,
-            vmax_slider,
-            colormap_choice,
+            color_choice,
             max_frames_slider,
         ],
         outputs=[gallery_output, info_text],
@@ -488,22 +408,23 @@ with gr.Blocks(title="Error Mask Visualizer") as demo:
         ---
         ### Usage Tips
         
-        1. **Upload** an `.npz` error mask file
-        2. **Adjust color range** to highlight different error magnitudes
+        1. **Upload** an `.npz` sampling mask file
+        2. **Choose color scheme** to visualize selected vs unselected patches
         3. **Single Frame View**: Visualize one frame at a time with detailed upscaling
-        4. **Gallery View**: See all frames at once for temporal patterns
+        4. **Gallery View**: See all frames at once to observe temporal consistency
         
         **Color Interpretation**: 
-        - 🔵 Blue/Dark = Low error (good)
-        - 🟡 Yellow/Orange = Medium error
-        - 🔴 Red/Bright = High error (bad)
-        - ⬛ Gray = Invalid/sky patches
+        - 🟢 Green/Bright = Selected patch (high VGGT attention)
+        - ⬛ Gray/Dark = Unselected patch (low attention or filtered out)
+        
+        **Paper Context**: These masks show the geometry-aware sampling strategy described in Section 4.1,
+        where only the top N% patches based on VGGT global attention are used for reprojection error computation.
         """
     )
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Starting Error Mask Visualizer")
+    print("Starting Sampling Mask Visualizer")
     print("=" * 60)
     demo.launch(
         server_name="0.0.0.0",

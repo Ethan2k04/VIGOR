@@ -616,14 +616,7 @@ def parse_args():
         default='cuda:0',
         help='GPU device to use (e.g., cuda:0, cuda:1, or cpu). Default: cuda:0'
     )
-    
-    parser.add_argument(
-        '--gpu-id',
-        type=int,
-        default=None,
-        help='GPU ID to use (0, 1, 2, etc.). Alternative to --device'
-    )
-    
+
     parser.add_argument(
         '--show-stats',
         action='store_true',

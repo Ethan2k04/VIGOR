@@ -1,4 +1,12 @@
 {
+  "input_root": "metrics/input",
+  "output_root": "metrics/output",
+  "categories": ["static_indoor", "static_outdoor", "static_dynamic_indoor", "static_dynamic_outdoor"],
+  "metrics": ["epipolar_consistency", "reprojection_error"],
+  "save_sampling_mask": true,
+  "output_suffix": "metrics.json",
+  "resume": true,
+  
   "epipolar_consistency": {
     "sampling_rate": 15,
     "descriptor_type": "sift",
@@ -6,6 +14,7 @@
     "ransac_thresh": 1.0,
     "min_matches": 2
   },
+  
   "reprojection_error": {
     "max_frames": 10,
     "short_side": 448,
@@ -16,6 +25,7 @@
     "attn_layer": 0,
     "attn_reduce": "max",
     "attn_topk": 8,
+    "filter_before_select": false,
     "enable_sky_onnx": true,
     "sky_onnx_path": "skyseg.onnx",
     "sky_threshold": 32,

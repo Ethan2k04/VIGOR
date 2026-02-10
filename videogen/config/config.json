@@ -13,7 +13,7 @@
     "base_seed_start": 0
   },
   "input": {
-    "input_dir": "caption/output",
+    "input_dir": "videogen/input",
     "all_captions_file": "all_captions.json"
   },
   "output": {
