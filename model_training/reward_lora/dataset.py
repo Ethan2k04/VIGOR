@@ -52,7 +52,7 @@ class DPOLatentDataset(Dataset):
         if "condition_path" not in entry:
             return False
         dataset_source = entry.get("dataset_source", "")
-        valid_datasets = ['DL3DV-10K', 'RealEstate10K']
+        valid_datasets = ['DL3DV-10K', 'RealEstate10K', 'gb3dv25k']
         if dataset_source not in valid_datasets:
             return False
         if self.filter_static:
