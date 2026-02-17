@@ -1,3 +1,32 @@
+# preprocess_dpo_data.py
+"""
+预处理脚本：将视频数据转换为DPO训练所需的latent格式（支持多卡并行，存储所有metric）
+
+用法（单卡）：
+  python preprocess_dpo_data.py \
+    --video_root /path/to/gb3dv25k \
+    --metric_root /path/to/output_metric \
+    --output_root /path/to/latent_output \
+    --wan_model_path /path/to/wan/model \
+    --output_metadata /path/to/annotated_metadata.json \
+    --metric_name epipolar_consistency \
+    --devices cuda:0
+
+用法（双卡并行）：
+  python preprocess_dpo_data.py \
+    --video_root /path/to/gb3dv25k \
+    --metric_root /path/to/output_metric \
+    --output_root /path/to/latent_output \
+    --wan_model_path /path/to/wan/model \
+    --output_metadata /path/to/annotated_metadata.json \
+    --metric_name epipolar_consistency \
+    --devices cuda:0 cuda:1
+
+说明：
+  - --metric_name 指定训练时使用的主指标（用于 DPO pair 排序）
+  - rankings.json 中的所有指标都会被存入 metadata，方便后续切换指标训练
+"""
+
 import os
 import gc
 import json
@@ -5,7 +34,7 @@ import argparse
 import logging
 import traceback
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 from collections import Counter, defaultdict
 
 import numpy as np
@@ -78,7 +107,6 @@ def load_video_as_tensor(
 # ---------------------------------------------------------------------------
 
 def load_wan_pipeline(wan_model_path: str, device: str):
-    """在指定 device 上加载 pipeline，权重先放 CPU，按需移到 device"""
     from diffsynth import WanVideoPipeline, ModelManager
 
     logger.info(f"[{device}] 加载模型: {wan_model_path}")
@@ -209,6 +237,35 @@ def normalize_dataset_source(raw: str, fallback: str = "gb3dv25k") -> str:
     return DATASET_SOURCE_MAP.get(raw.lower().strip(), fallback)
 
 
+def parse_all_metric_scores(rankings: dict) -> Dict[str, Dict[str, float]]:
+    """
+    从 rankings dict 中解析所有指标的得分。
+
+    输入：
+        rankings = {
+            "epipolar_consistency": [{"video_name": "seed00", "score": 2.37, "rank": 1}, ...],
+            "reprojection_vanilla": [...],
+            "reprojection_error":   [...],
+        }
+
+    返回：
+        {
+            "seed00": {"epipolar_consistency": 2.37, "reprojection_vanilla": 0.93, "reprojection_error": 1.67},
+            "seed01": {...},
+            ...
+        }
+    """
+    # seed_name -> {metric_name -> score}
+    all_scores: Dict[str, Dict[str, float]] = defaultdict(dict)
+
+    for metric_name, items in rankings.items():
+        for item in items:
+            seed_name = item["video_name"]
+            all_scores[seed_name][metric_name] = item["score"]
+
+    return dict(all_scores)
+
+
 # ---------------------------------------------------------------------------
 # 处理单个 prompt 文件夹
 # ---------------------------------------------------------------------------
@@ -218,13 +275,14 @@ def process_prompt_folder(
     video_prompt_dir: str,
     metric_prompt_dir: str,
     output_prompt_dir: str,
-    metric_name: str,
+    primary_metric: str,         # 主指标（用于校验数据是否有效，training时由train.yaml指定）
     default_dataset_source: str,
     device: str,
     overwrite: bool,
 ) -> list:
     os.makedirs(output_prompt_dir, exist_ok=True)
 
+    # ---- 读取视频 metadata ----
     meta_path = os.path.join(video_prompt_dir, "metadata.json")
     if not os.path.exists(meta_path):
         logger.warning(f"找不到 metadata.json，跳过: {meta_path}")
@@ -236,6 +294,7 @@ def process_prompt_folder(
     raw_ds    = meta.get("dataset", "")
     ds_source = normalize_dataset_source(raw_ds, default_dataset_source) if raw_ds else default_dataset_source
 
+    # ---- 读取 rankings，解析所有指标 ----
     rankings_path = os.path.join(metric_prompt_dir, "rankings.json")
     if not os.path.exists(rankings_path):
         logger.warning(f"找不到 rankings.json，跳过: {rankings_path}")
@@ -244,27 +303,46 @@ def process_prompt_folder(
         rankings_data = json.load(f)
 
     rankings = rankings_data.get("rankings", {})
-    if metric_name not in rankings:
-        logger.warning(f"metric '{metric_name}' 不在 {rankings_path}，可用: {list(rankings.keys())}")
+    if not rankings:
+        logger.warning(f"rankings 为空: {rankings_path}")
         return []
 
-    metric_scores = {item["video_name"]: item["score"] for item in rankings[metric_name]}
+    # 校验主指标存在
+    if primary_metric not in rankings:
+        logger.warning(
+            f"主指标 '{primary_metric}' 不在 {rankings_path}，"
+            f"可用: {list(rankings.keys())}"
+        )
+        return []
 
-    # 编码 prompt（每个 prompt 只做一次）
+    # 解析所有指标得分：{seed_name: {metric: score, ...}}
+    all_scores = parse_all_metric_scores(rankings)
+    available_metrics = list(rankings.keys())
+    logger.debug(f"  发现指标: {available_metrics}")
+
+    # ---- 编码 prompt（每个 prompt 只做一次）----
     shared_prompt_path = os.path.join(output_prompt_dir, "prompt_condition.pt")
     if overwrite or not os.path.exists(shared_prompt_path):
         prompt_emb = encode_text_condition(pipe, caption, device)
         torch.save({"prompt_embedding": prompt_emb}, shared_prompt_path)
 
+    # ---- 逐 seed 处理 ----
     entries     = []
     video_files = meta.get("video_files", [])
 
-    for video_file in tqdm(video_files, desc=f"  [{device}] {os.path.basename(video_prompt_dir)}", leave=False):
+    for video_file in tqdm(
+        video_files,
+        desc=f"  [{device}] {os.path.basename(video_prompt_dir)}",
+        leave=False,
+    ):
         seed_name  = video_file.replace(".mp4", "")
         video_path = os.path.join(video_prompt_dir, video_file)
 
-        if seed_name not in metric_scores:
+        if seed_name not in all_scores:
             logger.warning(f"  '{seed_name}' 无 metric 分数，跳过")
+            continue
+        if primary_metric not in all_scores[seed_name]:
+            logger.warning(f"  '{seed_name}' 缺少主指标 '{primary_metric}'，跳过")
             continue
         if not os.path.exists(video_path):
             logger.warning(f"  视频不存在: {video_path}")
@@ -273,6 +351,7 @@ def process_prompt_folder(
         latent_path    = os.path.join(output_prompt_dir, f"{seed_name}_latent.pt")
         condition_path = os.path.join(output_prompt_dir, f"{seed_name}_condition.pt")
 
+        # -- latent --
         if overwrite or not os.path.exists(latent_path):
             latent = encode_video_to_latent(pipe, video_path, device)
             if latent is None:
@@ -280,6 +359,7 @@ def process_prompt_folder(
                 continue
             torch.save(latent, latent_path)
 
+        # -- condition --
         if overwrite or not os.path.exists(condition_path):
             shared     = torch.load(shared_prompt_path, map_location="cpu")
             prompt_emb = shared["prompt_embedding"]
@@ -289,49 +369,49 @@ def process_prompt_folder(
                 condition["image_embedding"] = image_emb
             torch.save(condition, condition_path)
 
-        entries.append({
+        # -- 构建 entry：基础字段 + 所有指标分数 --
+        entry = {
             "original_video_path": video_prompt_dir,
             "latent_path":         os.path.abspath(latent_path),
             "condition_path":      os.path.abspath(condition_path),
-            metric_name:           metric_scores[seed_name],
             "dataset_source":      ds_source,
             "motion_dynamics":     0.0,
             "video_path":          os.path.abspath(video_path),
             "seed":                seed_name,
             "caption":             caption,
-        })
+        }
+
+        # 写入所有可用指标的分数
+        for metric_name in available_metrics:
+            entry[metric_name] = all_scores[seed_name].get(metric_name, float('nan'))
+
+        entries.append(entry)
 
     return entries
 
 
 # ---------------------------------------------------------------------------
-# 单进程worker：处理分配给自己的 prompt 列表
+# 单进程 worker
 # ---------------------------------------------------------------------------
 
 def worker(
     rank: int,
     device: str,
-    prompt_tasks: list,          # [(video_prompt_dir, metric_prompt_dir, output_prompt_dir), ...]
-    metric_name: str,
+    prompt_tasks: list,
+    primary_metric: str,
     default_dataset_source: str,
     wan_model_path: str,
     overwrite: bool,
     result_queue: mp.Queue,
 ):
-    """
-    每个 GPU 对应一个 worker 进程。
-    处理完成后把 entries list 放入 result_queue。
-    """
-    # 设置进程名，方便日志区分
-    import setproctitle
     try:
+        import setproctitle
         setproctitle.setproctitle(f"preprocess_{device}")
     except ImportError:
         pass
 
     logger.info(f"[{device}] Worker 启动，负责 {len(prompt_tasks)} 个 prompt")
-
-    pipe = load_wan_pipeline(wan_model_path, device)
+    pipe        = load_wan_pipeline(wan_model_path, device)
     all_entries = []
 
     for video_prompt_dir, metric_prompt_dir, output_prompt_dir in tqdm(
@@ -342,7 +422,7 @@ def worker(
             video_prompt_dir=video_prompt_dir,
             metric_prompt_dir=metric_prompt_dir,
             output_prompt_dir=output_prompt_dir,
-            metric_name=metric_name,
+            primary_metric=primary_metric,
             default_dataset_source=default_dataset_source,
             device=device,
             overwrite=overwrite,
@@ -363,7 +443,6 @@ def collect_all_tasks(
     output_root: Path,
     categories: List[str],
 ) -> list:
-    """收集所有需要处理的 (video_prompt_dir, metric_prompt_dir, output_prompt_dir) 三元组"""
     tasks = []
     for category in categories:
         video_cat  = video_root  / category
@@ -399,13 +478,14 @@ def collect_all_tasks(
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="预处理视频数据为 DPO 训练格式（支持多卡）")
+    parser = argparse.ArgumentParser(description="预处理视频数据为 DPO 训练格式（支持多卡，存储所有metric）")
     parser.add_argument("--video_root",      required=True)
     parser.add_argument("--metric_root",     required=True)
     parser.add_argument("--output_root",     required=True)
     parser.add_argument("--wan_model_path",  required=True)
     parser.add_argument("--output_metadata", default="annotated_metadata.json")
-    parser.add_argument("--metric_name",     default="epipolar_consistency")
+    parser.add_argument("--metric_name",     default="epipolar_consistency",
+                        help="主指标名称（用于数据校验，training时在train.yaml中指定）")
     parser.add_argument("--dataset_source",  default="gb3dv25k")
     parser.add_argument("--devices",         nargs="+", default=["cuda:0"],
                         help="使用的 GPU 列表，如 --devices cuda:0 cuda:1")
@@ -422,24 +502,21 @@ def main():
     )
     logger.info(f"Categories: {categories}")
     logger.info(f"使用设备: {args.devices}")
+    logger.info(f"主指标: {args.metric_name}（rankings.json 中所有指标均会存入 metadata）")
 
-    # 收集全部任务
     all_tasks = collect_all_tasks(video_root, metric_root, output_root, categories)
     logger.info(f"共 {len(all_tasks)} 个 prompt 任务，分配到 {len(args.devices)} 张卡")
 
-    # 按 GPU 数量切分任务（round-robin 均匀分配）
-    num_gpus   = len(args.devices)
+    num_gpus    = len(args.devices)
     task_shards = [[] for _ in range(num_gpus)]
     for i, task in enumerate(all_tasks):
         task_shards[i % num_gpus].append(task)
-
-    for i, (device, shard) in enumerate(zip(args.devices, task_shards)):
+    for device, shard in zip(args.devices, task_shards):
         logger.info(f"  {device}: {len(shard)} 个 prompt")
 
-    # 单卡直接在主进程跑，避免多进程 overhead
+    # ---- 单卡：主进程直接处理 ----
     if num_gpus == 1:
-        logger.info("单卡模式，主进程直接处理")
-        pipe = load_wan_pipeline(args.wan_model_path, args.devices[0])
+        pipe        = load_wan_pipeline(args.wan_model_path, args.devices[0])
         all_entries = []
         for video_prompt_dir, metric_prompt_dir, output_prompt_dir in tqdm(
             all_tasks, desc=f"[{args.devices[0]}]"
@@ -449,16 +526,15 @@ def main():
                 video_prompt_dir=video_prompt_dir,
                 metric_prompt_dir=metric_prompt_dir,
                 output_prompt_dir=output_prompt_dir,
-                metric_name=args.metric_name,
+                primary_metric=args.metric_name,
                 default_dataset_source=args.dataset_source,
                 device=args.devices[0],
                 overwrite=args.overwrite,
             )
             all_entries.extend(entries)
 
+    # ---- 多卡：spawn 子进程 ----
     else:
-        # 多卡：每张卡启动一个独立进程
-        # 必须用 spawn，避免 CUDA 多进程 fork 问题
         mp.set_start_method("spawn", force=True)
         result_queue = mp.Queue()
         processes    = []
@@ -471,7 +547,7 @@ def main():
                     rank=rank,
                     device=device,
                     prompt_tasks=shard,
-                    metric_name=args.metric_name,
+                    primary_metric=args.metric_name,
                     default_dataset_source=args.dataset_source,
                     wan_model_path=args.wan_model_path,
                     overwrite=args.overwrite,
@@ -482,10 +558,9 @@ def main():
             processes.append(p)
             logger.info(f"已启动 worker PID={p.pid} -> {device}")
 
-        # 等待所有进程完成并收集结果
         results = {}
         for _ in processes:
-            rank, entries = result_queue.get()   # 阻塞直到有结果
+            rank, entries = result_queue.get()
             results[rank] = entries
 
         for p in processes:
@@ -493,7 +568,6 @@ def main():
             if p.exitcode != 0:
                 logger.error(f"Worker {p.name} 异常退出，exitcode={p.exitcode}")
 
-        # 按 rank 顺序合并，保证结果顺序确定
         all_entries = []
         for rank in sorted(results.keys()):
             all_entries.extend(results[rank])
@@ -509,12 +583,21 @@ def main():
         sources = Counter(e["dataset_source"] for e in all_entries)
         logger.info(f"数据集分布: {dict(sources)}")
 
-        scores = [e[args.metric_name] for e in all_entries]
-        logger.info(
-            f"Metric '{args.metric_name}': "
-            f"min={min(scores):.3f}  max={max(scores):.3f}  "
-            f"mean={np.mean(scores):.3f}  n={len(scores)}"
-        )
+        # 打印所有存在的指标统计
+        sample = all_entries[0]
+        stored_metrics = [
+            k for k in sample
+            if k not in {"original_video_path", "latent_path", "condition_path",
+                         "dataset_source", "motion_dynamics", "video_path", "seed", "caption"}
+        ]
+        logger.info(f"已存储的指标: {stored_metrics}")
+        for m in stored_metrics:
+            scores = [e[m] for e in all_entries if not np.isnan(e.get(m, float('nan')))]
+            if scores:
+                logger.info(
+                    f"  {m}: min={min(scores):.3f}  max={max(scores):.3f}  "
+                    f"mean={np.mean(scores):.3f}  n={len(scores)}"
+                )
 
         groups      = defaultdict(int)
         for e in all_entries:
