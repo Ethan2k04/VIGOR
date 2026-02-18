@@ -4,6 +4,8 @@ import json
 import argparse
 import logging
 import traceback
+import threading
+import time
 from pathlib import Path
 from typing import Optional, List, Dict
 from collections import Counter, defaultdict
@@ -26,6 +28,13 @@ DATASET_SOURCE_MAP = {
     "real-estate-10k": "gb3dv25k",
     "dl3dv":           "gb3dv25k",
     "dl3dv-10k":       "gb3dv25k",
+}
+
+# rankings.json 中的原始 metric 名 -> 存入 metadata 时使用的标准名
+METRIC_RENAME_MAP = {
+    "epipolar_consistency":  "epipolar_consistency",   # 保持不变
+    "reprojection_vanilla":  "reprojection_pixel",
+    "reprojection_error":    "reprojection_euclidean",
 }
 
 VIDEO_HEIGHT = 480
@@ -210,29 +219,30 @@ def normalize_dataset_source(raw: str, fallback: str = "gb3dv25k") -> str:
 
 def parse_all_metric_scores(rankings: dict) -> Dict[str, Dict[str, float]]:
     """
-    从 rankings dict 中解析所有指标的得分。
+    从 rankings dict 中解析所有指标的得分，并按 METRIC_RENAME_MAP 重命名。
 
     输入：
         rankings = {
             "epipolar_consistency": [{"video_name": "seed00", "score": 2.37, "rank": 1}, ...],
-            "reprojection_vanilla": [...],
-            "reprojection_error":   [...],
+            "reprojection_vanilla": [...],   # -> 重命名为 reprojection_pixel
+            "reprojection_error":   [...],   # -> 重命名为 reprojection_euclidean
         }
 
-    返回：
+    返回（使用重映射后的名称）：
         {
-            "seed00": {"epipolar_consistency": 2.37, "reprojection_vanilla": 0.93, "reprojection_error": 1.67},
+            "seed00": {"epipolar_consistency": 2.37, "reprojection_pixel": 0.93, "reprojection_euclidean": 1.67},
             "seed01": {...},
             ...
         }
     """
-    # seed_name -> {metric_name -> score}
     all_scores: Dict[str, Dict[str, float]] = defaultdict(dict)
 
-    for metric_name, items in rankings.items():
+    for raw_metric_name, items in rankings.items():
+        # 应用重映射，若不在映射表中则保持原名
+        stored_name = METRIC_RENAME_MAP.get(raw_metric_name, raw_metric_name)
         for item in items:
             seed_name = item["video_name"]
-            all_scores[seed_name][metric_name] = item["score"]
+            all_scores[seed_name][stored_name] = item["score"]
 
     return dict(all_scores)
 
@@ -278,17 +288,20 @@ def process_prompt_folder(
         logger.warning(f"rankings 为空: {rankings_path}")
         return []
 
-    # 校验主指标存在
-    if primary_metric not in rankings:
+    # 解析所有指标得分（已应用重映射）：{seed_name: {stored_metric: score, ...}}
+    all_scores = parse_all_metric_scores(rankings)
+    # available_metrics 使用重映射后的名称
+    available_metrics = list(next(iter(all_scores.values())).keys()) if all_scores else []
+
+    # 校验主指标存在（primary_metric 应使用重映射后的名称）
+    if primary_metric not in available_metrics:
+        raw_names = list(rankings.keys())
+        stored_names = [METRIC_RENAME_MAP.get(n, n) for n in raw_names]
         logger.warning(
-            f"主指标 '{primary_metric}' 不在 {rankings_path}，"
-            f"可用: {list(rankings.keys())}"
+            f"主指标 '{primary_metric}' 不在已存储指标 {stored_names} 中，"
+            f"rankings.json 原始名: {raw_names}"
         )
         return []
-
-    # 解析所有指标得分：{seed_name: {metric: score, ...}}
-    all_scores = parse_all_metric_scores(rankings)
-    available_metrics = list(rankings.keys())
     logger.debug(f"  发现指标: {available_metrics}")
 
     # ---- 编码 prompt（每个 prompt 只做一次）----
@@ -374,6 +387,7 @@ def worker(
     wan_model_path: str,
     overwrite: bool,
     result_queue: mp.Queue,
+    progress_queue: mp.Queue,  # 新增：用于报告进度
 ):
     try:
         import setproctitle
@@ -385,9 +399,7 @@ def worker(
     pipe        = load_wan_pipeline(wan_model_path, device)
     all_entries = []
 
-    for video_prompt_dir, metric_prompt_dir, output_prompt_dir in tqdm(
-        prompt_tasks, desc=f"[{device}]", position=rank
-    ):
+    for i, (video_prompt_dir, metric_prompt_dir, output_prompt_dir) in enumerate(prompt_tasks):
         entries = process_prompt_folder(
             pipe=pipe,
             video_prompt_dir=video_prompt_dir,
@@ -399,6 +411,9 @@ def worker(
             overwrite=overwrite,
         )
         all_entries.extend(entries)
+        
+        # 每处理完一个prompt就通知主进程更新进度
+        progress_queue.put(1)
 
     logger.info(f"[{device}] Worker 完成，共 {len(all_entries)} 个 entries")
     result_queue.put((rank, all_entries))
@@ -489,26 +504,29 @@ def main():
     if num_gpus == 1:
         pipe        = load_wan_pipeline(args.wan_model_path, args.devices[0])
         all_entries = []
-        for video_prompt_dir, metric_prompt_dir, output_prompt_dir in tqdm(
-            all_tasks, desc=f"[{args.devices[0]}]"
-        ):
-            entries = process_prompt_folder(
-                pipe=pipe,
-                video_prompt_dir=video_prompt_dir,
-                metric_prompt_dir=metric_prompt_dir,
-                output_prompt_dir=output_prompt_dir,
-                primary_metric=args.metric_name,
-                default_dataset_source=args.dataset_source,
-                device=args.devices[0],
-                overwrite=args.overwrite,
-            )
-            all_entries.extend(entries)
+        
+        # 单卡模式：直接在主循环显示进度条
+        with tqdm(total=len(all_tasks), desc="预处理进度", unit="prompt") as pbar:
+            for video_prompt_dir, metric_prompt_dir, output_prompt_dir in all_tasks:
+                entries = process_prompt_folder(
+                    pipe=pipe,
+                    video_prompt_dir=video_prompt_dir,
+                    metric_prompt_dir=metric_prompt_dir,
+                    output_prompt_dir=output_prompt_dir,
+                    primary_metric=args.metric_name,
+                    default_dataset_source=args.dataset_source,
+                    device=args.devices[0],
+                    overwrite=args.overwrite,
+                )
+                all_entries.extend(entries)
+                pbar.update(1)
 
     # ---- 多卡：spawn 子进程 ----
     else:
         mp.set_start_method("spawn", force=True)
-        result_queue = mp.Queue()
-        processes    = []
+        result_queue   = mp.Queue()
+        progress_queue = mp.Queue()  # 用于worker报告进度
+        processes      = []
 
         for rank, (device, shard) in enumerate(zip(args.devices, task_shards)):
             p = mp.Process(
@@ -523,25 +541,51 @@ def main():
                     wan_model_path=args.wan_model_path,
                     overwrite=args.overwrite,
                     result_queue=result_queue,
+                    progress_queue=progress_queue,
                 ),
             )
             p.start()
             processes.append(p)
             logger.info(f"已启动 worker PID={p.pid} -> {device}")
 
-        results = {}
-        for _ in processes:
-            rank, entries = result_queue.get()
-            results[rank] = entries
+        # 主进程监控进度并更新进度条
+        all_entries = []
+        with tqdm(total=len(all_tasks), desc="预处理进度", unit="prompt") as pbar:
+            completed = 0
+            workers_done = 0
+            
+            while workers_done < len(processes):
+                # 非阻塞检查进度更新
+                try:
+                    progress_queue.get(timeout=0.1)
+                    completed += 1
+                    pbar.update(1)
+                except:
+                    pass
+                
+                # 检查是否有worker完成（非阻塞）
+                try:
+                    rank, entries = result_queue.get(timeout=0.1)
+                    all_entries.append((rank, entries))
+                    workers_done += 1
+                except:
+                    pass
+            
+            # 确保进度条到100%
+            if completed < len(all_tasks):
+                pbar.update(len(all_tasks) - completed)
 
+        # 等待所有进程退出
         for p in processes:
             p.join()
             if p.exitcode != 0:
                 logger.error(f"Worker {p.name} 异常退出，exitcode={p.exitcode}")
 
+        # 按 rank 顺序合并结果
+        results_dict = dict(all_entries)
         all_entries = []
-        for rank in sorted(results.keys()):
-            all_entries.extend(results[rank])
+        for rank in sorted(results_dict.keys()):
+            all_entries.extend(results_dict[rank])
 
     # ---- 保存 metadata ----
     with open(args.output_metadata, 'w') as f:
