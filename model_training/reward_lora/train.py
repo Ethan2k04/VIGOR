@@ -16,8 +16,8 @@ import hydra
 from hydra.core.config_store import ConfigStore
 from diffusers.optimization import get_scheduler
 
-from reward_lora.dataset import DPOLatentDataset
-from reward_lora.loss import create_loss_strategy, LossOutput
+from dataset import DPOLatentDataset
+from loss import create_loss_strategy, LossOutput
 
 
 @dataclass
@@ -61,7 +61,7 @@ class ModelConfig:
 @dataclass
 class DataConfig:
     metadata_path: str = MISSING
-    metric_name: str = "shadow_realism"
+    metric_name: str = "reprojection_euclidean"
     metric_mode: str = "min"
     min_gap: float = 0.0
     metric_threshold: Optional[float] = None

@@ -1,32 +1,3 @@
-# preprocess_dpo_data.py
-"""
-预处理脚本：将视频数据转换为DPO训练所需的latent格式（支持多卡并行，存储所有metric）
-
-用法（单卡）：
-  python preprocess_dpo_data.py \
-    --video_root /path/to/gb3dv25k \
-    --metric_root /path/to/output_metric \
-    --output_root /path/to/latent_output \
-    --wan_model_path /path/to/wan/model \
-    --output_metadata /path/to/annotated_metadata.json \
-    --metric_name epipolar_consistency \
-    --devices cuda:0
-
-用法（双卡并行）：
-  python preprocess_dpo_data.py \
-    --video_root /path/to/gb3dv25k \
-    --metric_root /path/to/output_metric \
-    --output_root /path/to/latent_output \
-    --wan_model_path /path/to/wan/model \
-    --output_metadata /path/to/annotated_metadata.json \
-    --metric_name epipolar_consistency \
-    --devices cuda:0 cuda:1
-
-说明：
-  - --metric_name 指定训练时使用的主指标（用于 DPO pair 排序）
-  - rankings.json 中的所有指标都会被存入 metadata，方便后续切换指标训练
-"""
-
 import os
 import gc
 import json
