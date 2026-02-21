@@ -264,6 +264,12 @@ class FlowDPOTrainer(pl.LightningModule):
                                                "image_emb_win", "image_emb_lose")},
                 }
             )
+            # 在training_step的return loss之前加
+            total_norm = torch.nn.utils.clip_grad_norm_(
+                self.peft_model.parameters(), max_norm=float('inf')  # 只计算不clip
+            )
+            self.log("grad_norm", total_norm, prog_bar=True)
+
             self.log("phase", 0.0, prog_bar=True)
 
         # ── Phase 2: DPO ───────────────────────────────────────────────
@@ -330,6 +336,13 @@ class FlowDPOTrainer(pl.LightningModule):
         self.log("win_metric", m_win, prog_bar=False)
         self.log("lose_metric", m_lose, prog_bar=False)
         self.log("metric_gap", m_win - m_lose, prog_bar=False)
+
+        # 在training_step的return loss之前加
+        total_norm = torch.nn.utils.clip_grad_norm_(
+            self.peft_model.parameters(), max_norm=float('inf')  # 只计算不clip
+        )
+        self.log("grad_norm", total_norm, prog_bar=True)
+
         for key, item in loss_output.metrics.items():
             self.log(key, item, prog_bar=True)
         return loss
