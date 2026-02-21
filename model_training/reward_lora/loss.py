@@ -158,7 +158,7 @@ class SFTLossStrategy(BaseLossStrategy):
             velocities['win'].float(), 
             velocities['win_target'].float()
         )
-        base_loss = base_loss.mean() * velocities["win_metric"].mean()
+        base_loss = base_loss.mean() # * velocities["win_metric"].mean() # I think we don't need this re-weighting [ETHAN: 2026-02-21]
         
         return base_loss, {}
 

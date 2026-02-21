@@ -11,6 +11,8 @@ training:
   inlier_regression_lambda: 0.0
   gradient_clip_val: 1.0
   gradient_clip_algorithm: "norm"
+  sft_warmup_steps: 500
+  sft_learning_rate: 5e-5
 
 lora:
   rank: 64
