@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
-# download.sh - 一键下载数据集、解压、下载模型权重
-# 使用方法: bash download.sh
+# setup.sh - 一键下载数据集、解压、下载模型权重
+# 使用方法: bash setup.sh
 # 请将此脚本放在 model_training/ 目录下运行
 # =============================================================================
 
@@ -15,7 +15,7 @@ echo " 当前工作目录: $SCRIPT_DIR"
 echo "=================================================="
 
 REPO_ID="Ethan2k04/GB3DV-25k"
-DATASET_CACHE="./ms_dataset_cache"   # modelscope 下载缓存目录
+DATASET_CACHE="./ms_dataset_cache"
 INPUT_LATENT_DIR="./input_latent"
 
 # --------------------------------------------------------------------------
@@ -46,29 +46,33 @@ echo "  仓库: $REPO_ID"
 mkdir -p "$DATASET_CACHE"
 
 python3 - <<PYEOF
-from modelscope.hub.api import HubApi
+from modelscope.hub.file_download import dataset_file_download
 import os
+
+REPO_ID = "Ethan2k04/GB3DV-25k"
+CACHE_DIR = "$DATASET_CACHE"
 
 files_to_download = [
     *[f"input_latent_part{i}.tar" for i in range(1, 17)],
     "annotated_metadata.json",
 ]
 
-api = HubApi()
-
 for filename in files_to_download:
-    dest = os.path.join("$DATASET_CACHE", filename)
+    dest = os.path.join(CACHE_DIR, filename)
     if os.path.exists(dest):
         print(f"  已存在，跳过: {filename}")
         continue
     print(f"  正在下载: {filename} ...")
     try:
-        api.download_file(
-            repo_id="$REPO_ID",
-            repo_type="dataset",
-            path=filename,
-            local_path=dest,
+        downloaded_path = dataset_file_download(
+            dataset_id=REPO_ID,
+            file_path=filename,
+            cache_dir=CACHE_DIR,
         )
+        # 移动到期望位置（dataset_file_download 可能放在子目录）
+        if downloaded_path != dest:
+            import shutil
+            shutil.move(downloaded_path, dest)
         print(f"  ✓ 下载完成: {filename}")
     except Exception as e:
         print(f"  ✗ 下载失败: {filename} -> {e}")
@@ -95,8 +99,6 @@ for i in $(seq 1 16); do
     fi
 
     echo "  正在解压: $TAR_FILE -> input_latent/ ..."
-    # tar 包内已包含完整 input_latent/<category>/<prompt>/ 层级
-    # 解压到 INPUT_LATENT_DIR 的上一级（即 model_training/），还原完整结构
     tar -xf "$TAR_PATH" -C "$(dirname "$INPUT_LATENT_DIR")"
     echo "  ✓ 解压完成: $TAR_FILE"
 done
@@ -130,7 +132,7 @@ echo "=================================================="
 echo " 全部完成！最终目录结构："
 echo "=================================================="
 echo "model_training/"
-echo "├── download.sh"
+echo "├── setup.sh"
 echo "├── annotated_metadata.json"
 echo "├── input_latent/"
 echo "│   ├── static_indoor/"
