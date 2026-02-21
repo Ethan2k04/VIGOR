@@ -1,4 +1,4 @@
-# Aligning Video Diffusion Model with Visual Geometry Grounded Reward (ECCV 2026)
+# Aligning Video Diffusion Model with Visual Geometry Grounded Reward
 
 ## News
 
@@ -6,67 +6,21 @@
 
 ## Installation
 
-## Usage
+## How to train
 
-Generate `static` and `static_dynamic` captions for prompting:
+**Prerequisite: Python 3.10 and a torch version that support cuda 12.8**
 
-```bash
-python -m caption.generate_caption --config caption/config/config.json
-```
-
-Your input files should be organized in below format:
-
-```
-caption/input/
-          ├── dataset_A/
-          │     ├── images/
-          │     │     ├── 000.jpg
-          │     │     └── ...
-          │     └── videos
-          │           ├── 000.mp4
-          │           └── ...
-          └── ...
-```
-
-Generate video samples using `Wan2.1` text to video model:
-
-```bash
-python -m videogen.generate_video --config videogen/config/config.json
-```
-
-Input .json caption files should be placed in `videogen/input` folder.
-
-Use `epipolar` or `reprojection` metric to evaluate generated videos:
-
-```bash
-python -m metrics.evaluate_all \
---config metrics/config/config.json \
---input_root your/input/video/path \
---output_root your/output/json/path \
---metrics epipolar_consistency,reprojection_error 
-```
-
-Your input files should be organized in below format:
-
-```
-metrics/input/
-          ├── static/
-          │     ├── prompt_000_xxx/
-          │     │     ├── seed_000.mp4
-          │     │     └── ...
-          │     └── ...
-          └── ...
-
-```
-
-Train a LoRA adpater with DPO, Flow-DPO or Masked Flow-DPO target funtion:
-
-```bash
-python -m model_training.train --config model_training/config/config.json
-```
+* Step 1.  `cd model_training/` and run `pip install -r requirements.txt` to install dependencies.
+* Step 2.  run `bash download.bash` to download preprocessed *gb3dv-25k* dataset along with *Wan2.1-T2V-1.3B* model.
+* Step 3.  `cd reward_lora/config/` and configure your training settings in `train.yaml`
+* Step 4.  `cd reward_lora/` and run `python train.py` to start the training process
 
 ## Citation
 
+If you use this code in your research, please cite:
+
 ## License
+
+This project is licensed under the MIT License.
 
 ## Acknowledgment
