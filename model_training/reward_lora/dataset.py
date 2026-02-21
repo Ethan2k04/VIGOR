@@ -5,7 +5,9 @@ from typing import Dict, List, Tuple, Literal, Any
 import logging
 from collections import defaultdict
 import numpy as np
+from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 MOTION_THRESHOLD = 0.9
 
@@ -179,14 +181,14 @@ class DPOLatentDataset(Dataset):
         """
         winner, loser = self.pairs[idx]
 
-        win_condition = self._load_condition(winner["condition_path"])
-        lose_condition = self._load_condition(loser["condition_path"])
+        win_condition = self._load_condition(PROJECT_ROOT / winner["condition_path"])
+        lose_condition = self._load_condition(PROJECT_ROOT / loser["condition_path"])
         
         win_has_img = "image_embedding" in win_condition and isinstance(win_condition.get("image_embedding"), dict) and len(win_condition["image_embedding"]) > 0
         lose_has_img = "image_embedding" in lose_condition and isinstance(lose_condition.get("image_embedding"), dict) and len(lose_condition["image_embedding"]) > 0
 
-        x_win = torch.load(winner["latent_path"], map_location="cpu")
-        x_lose = torch.load(loser["latent_path"], map_location="cpu")
+        x_win = torch.load(PROJECT_ROOT / winner["latent_path"], map_location="cpu")
+        x_lose = torch.load(PROJECT_ROOT / loser["latent_path"], map_location="cpu")
         if x_win.dim() == 5 and x_win.size(0) == 1:
             x_win = x_win.squeeze(0)
         if x_lose.dim() == 5 and x_lose.size(0) == 1:

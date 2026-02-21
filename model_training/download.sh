@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
-# setup.sh - 一键下载数据集、解压、下载模型权重
-# 使用方法: bash setup.sh
+# download.sh - 一键下载数据集、解压、下载模型权重
+# 使用方法: bash download.sh
 # 请将此脚本放在 model_training/ 目录下运行
 # =============================================================================
 
@@ -14,24 +14,9 @@ echo "=================================================="
 echo " 当前工作目录: $SCRIPT_DIR"
 echo "=================================================="
 
-# --------------------------------------------------------------------------
-# 配置区：tar 文件名与解压目标文件夹的对应关系
-# 按照截图结构：
-#   _part1 -> static_indoor
-#   _part2 -> static_outdoor
-#   _part3 -> static_dynamic_indoor
-#   _part4 -> static_dynamic_outdoor
-# --------------------------------------------------------------------------
 REPO_ID="Ethan2k04/GB3DV-25k"
 DATASET_CACHE="./ms_dataset_cache"   # modelscope 下载缓存目录
 INPUT_LATENT_DIR="./input_latent"
-
-declare -A TAR_TO_DIR=(
-    ["input_latent_part1.tar"]="static_indoor"
-    ["input_latent_part2.tar"]="static_outdoor"
-    ["input_latent_part3.tar"]="static_dynamic_indoor"
-    ["input_latent_part4.tar"]="static_dynamic_outdoor"
-)
 
 # --------------------------------------------------------------------------
 # Step 1: 检查依赖
@@ -52,7 +37,7 @@ python3 -c "import modelscope" 2>/dev/null || {
 echo "依赖检查完成。"
 
 # --------------------------------------------------------------------------
-# Step 2: 从 ModelScope 下载数据集文件
+# Step 2: 从 ModelScope 下载数据集文件（16 个 part）
 # --------------------------------------------------------------------------
 echo ""
 echo "[Step 2/4] 从 ModelScope 下载数据集..."
@@ -60,17 +45,12 @@ echo "  仓库: $REPO_ID"
 
 mkdir -p "$DATASET_CACHE"
 
-# 下载所有 tar 文件和 json
 python3 - <<PYEOF
 from modelscope.hub.api import HubApi
-from modelscope import dataset_snapshot_download
 import os
 
 files_to_download = [
-    "input_latent_part1.tar",
-    "input_latent_part2.tar",
-    "input_latent_part3.tar",
-    "input_latent_part4.tar",
+    *[f"input_latent_part{i}.tar" for i in range(1, 17)],
     "annotated_metadata.json",
 ]
 
@@ -98,36 +78,27 @@ PYEOF
 echo "数据集文件下载完成。"
 
 # --------------------------------------------------------------------------
-# Step 3: 解压 tar 文件到对应目录
+# Step 3: 解压全部 16 个 tar 到 input_latent/
 # --------------------------------------------------------------------------
 echo ""
 echo "[Step 3/4] 解压 tar 文件..."
 
 mkdir -p "$INPUT_LATENT_DIR"
 
-for TAR_FILE in "${!TAR_TO_DIR[@]}"; do
-    TARGET_SUBDIR="${TAR_TO_DIR[$TAR_FILE]}"
+for i in $(seq 1 16); do
+    TAR_FILE="input_latent_part${i}.tar"
     TAR_PATH="$DATASET_CACHE/$TAR_FILE"
-    TARGET_PATH="$INPUT_LATENT_DIR/$TARGET_SUBDIR"
 
     if [ ! -f "$TAR_PATH" ]; then
         echo "  ✗ 找不到文件: $TAR_PATH，跳过。"
         continue
     fi
 
-    if [ -d "$TARGET_PATH" ] && [ "$(ls -A "$TARGET_PATH")" ]; then
-        echo "  已存在且非空，跳过解压: $TARGET_SUBDIR"
-        continue
-    fi
-
-    mkdir -p "$TARGET_PATH"
-    echo "  正在解压: $TAR_FILE -> input_latent/$TARGET_SUBDIR/ ..."
-
-    # 解压时去掉 tar 内顶层目录（如果有的话），直接解压内容到目标目录
-    tar -xf "$TAR_PATH" -C "$TARGET_PATH" --strip-components=1 2>/dev/null \
-        || tar -xf "$TAR_PATH" -C "$TARGET_PATH"
-
-    echo "  ✓ 解压完成: $TARGET_SUBDIR"
+    echo "  正在解压: $TAR_FILE -> input_latent/ ..."
+    # tar 包内已包含完整 input_latent/<category>/<prompt>/ 层级
+    # 解压到 INPUT_LATENT_DIR 的上一级（即 model_training/），还原完整结构
+    tar -xf "$TAR_PATH" -C "$(dirname "$INPUT_LATENT_DIR")"
+    echo "  ✓ 解压完成: $TAR_FILE"
 done
 
 # 复制 json 到 model_training 根目录
@@ -159,7 +130,7 @@ echo "=================================================="
 echo " 全部完成！最终目录结构："
 echo "=================================================="
 echo "model_training/"
-echo "├── setup.sh"
+echo "├── download.sh"
 echo "├── annotated_metadata.json"
 echo "├── input_latent/"
 echo "│   ├── static_indoor/"
