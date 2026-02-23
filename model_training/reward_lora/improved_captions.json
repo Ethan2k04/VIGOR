@@ -1,0 +1,67 @@
+[
+  {
+    "original_video_path": "input_video/static_outdoor/prompt01044",
+    "latent_path": "/root/autodl-tmp/vggt-dpo-master/model_training/output_latent/static_outdoor/prompt01044/seed00_latent.pt",
+    "condition_path": "/root/autodl-tmp/vggt-dpo-master/model_training/output_latent/static_outdoor/prompt01044/seed00_condition.pt",
+    "dataset_source": "gb3dv25k",
+    "motion_dynamics": 0.0,
+    "video_path": "/root/autodl-tmp/vggt-dpo-master/model_training/input_video/static_outdoor/prompt01044/seed00.mp4",
+    "seed": "seed00",
+    "caption": "Close-up shot of a weathered stone wall at the base of a hilltop castle. Camera pans Pan left. Camera pan reveals the full silhouette of the ancient fortress with its red-tiled roof, sturdy stone ramparts, and three fluttering flags against a dramatic blue sky streaked with clouds. The scene is static, emphasizing the castle’s imposing presence and historic grandeur.",
+    "epipolar_consistency": 2.3065972328186035,
+    "reprojection_pixel": 0.9271838511630227,
+    "reprojection_euclidean": 1.0446353224962852
+  },
+  {
+    "original_video_path": "input_video/static_outdoor/prompt01037",
+    "latent_path": "/root/autodl-tmp/vggt-dpo-master/model_training/output_latent/static_outdoor/prompt01037/seed00_latent.pt",
+    "condition_path": "/root/autodl-tmp/vggt-dpo-master/model_training/output_latent/static_outdoor/prompt01037/seed00_condition.pt",
+    "dataset_source": "gb3dv25k",
+    "motion_dynamics": 0.0,
+    "video_path": "/root/autodl-tmp/vggt-dpo-master/model_training/input_video/static_outdoor/prompt01037/seed00.mp4",
+    "seed": "seed00",
+    "caption": "Close-up shot of the Eiffel Tower’s intricate iron lattice at its base. Camera tilts down. Camera tilt reveals the full grandeur of the iconic structure rising against a soft blue sky, its elegant arches and riveted framework catching the golden afternoon light, framed by autumn trees and a quiet park below.",
+    "epipolar_consistency": 3.409998655319214,
+    "reprojection_pixel": 0.9162802615213073,
+    "reprojection_euclidean": 0.9760983221673099
+  },
+  {
+    "original_video_path": "input_video/static_outdoor/prompt01176",
+    "latent_path": "/root/autodl-tmp/vggt-dpo-master/model_training/output_latent/static_outdoor/prompt01176/seed00_latent.pt",
+    "condition_path": "/root/autodl-tmp/vggt-dpo-master/model_training/output_latent/static_outdoor/prompt01176/seed00_condition.pt",
+    "dataset_source": "gb3dv25k",
+    "motion_dynamics": 0.0,
+    "video_path": "/root/autodl-tmp/vggt-dpo-master/model_training/input_video/static_outdoor/prompt01176/seed00.mp4",
+    "seed": "seed00",
+    "caption": "Close-up shot of the Quadriga statue atop the Brandenburg Gate. Camera pans right. Camera pan reveals the grand neoclassical archway, its massive columns flanked by colonnades, with tourists strolling the plaza and horse-drawn carriages waiting below under a cloudy sky.",
+    "epipolar_consistency": 6.875926971435547,
+    "reprojection_pixel": 0.9766599050226963,
+    "reprojection_euclidean": 0.7594168356909722
+  },
+  {
+    "original_video_path": "input_video/static_indoor/prompt00420",
+    "latent_path": "/root/autodl-tmp/vggt-dpo-master/model_training/output_latent/static_indoor/prompt00420/seed00_latent.pt",
+    "condition_path": "/root/autodl-tmp/vggt-dpo-master/model_training/output_latent/static_indoor/prompt00420/seed00_condition.pt",
+    "dataset_source": "gb3dv25k",
+    "motion_dynamics": 0.0,
+    "video_path": "/root/autodl-tmp/vggt-dpo-master/model_training/input_video/static_indoor/prompt00420/seed00.mp4",
+    "seed": "seed00",
+    "caption": "Close-up shot of a white house’s front steps and brick pillar. Camera pans right. Camera pan reveals a spacious asphalt driveway, three garage doors, lush greenery, and mature trees casting dappled shadows. The house’s symmetrical windows and arched entryway frame the tranquil suburban setting under bright daylight.",
+    "epipolar_consistency": 6.56890869140625,
+    "reprojection_pixel": 1.0404622891614912,
+    "reprojection_euclidean": 1.9749823872034775
+  },
+    {
+    "original_video_path": "input_video/static_outdoor/prompt01224",
+    "latent_path": "/root/autodl-tmp/vggt-dpo-master/model_training/output_latent/static_outdoor/prompt01224/seed00_latent.pt",
+    "condition_path": "/root/autodl-tmp/vggt-dpo-master/model_training/output_latent/static_outdoor/prompt01224/seed00_condition.pt",
+    "dataset_source": "gb3dv25k",
+    "motion_dynamics": 0.0,
+    "video_path": "/root/autodl-tmp/vggt-dpo-master/model_training/input_video/static_outdoor/prompt01224/seed00.mp4",
+    "seed": "seed00",
+    "caption": "Close-up shot of the London Eye’s gleaming white rim against a cloudy sky. Camera pans right. Camera pan reveals the Thames River below, a red-and-white riverboat drifting calmly, and historic buildings lining the waterfront, including a grand stone façade and modern skyscrapers in the distance. The scene remains static, capturing London’s iconic skyline in serene detail.",
+    "epipolar_consistency": 3.007117748260498,
+    "reprojection_pixel": 0.9183213582896472,
+    "reprojection_euclidean": 1.5005017603102448
+  }
+]
