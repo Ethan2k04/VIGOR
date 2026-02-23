@@ -101,6 +101,85 @@ class StaticPenaltyLoss(BaseAuxiliaryLoss):
         return penalty
 
 
+class MotionSmoothnessLoss(BaseAuxiliaryLoss):
+    """
+    Motion smoothness auxiliary loss.
+
+    Penalizes temporal jitter/stuttering in the reconstructed clean frames by
+    minimising the second-order temporal differences (acceleration) of pixel
+    values.  This encourages smooth, continuous motion rather than abrupt
+    frame-to-frame changes.
+
+    Two complementary components:
+      1. Acceleration penalty  — mean squared second-order diff ΔΔf_t.
+         Directly targets the kind of per-frame jitter that reads as stuttering.
+      2. Speed-consistency penalty — temporal variance of per-frame motion energy.
+         Penalises "fast → sudden freeze → fast" patterns even when individual
+         accelerations are small.
+
+    Empirical intuition (latent space):
+      - Smooth video  : low acceleration, consistent inter-frame motion energy
+      - Stuttering video : high acceleration, erratic inter-frame motion energy
+
+    Note on interaction with StaticPenaltyLoss:
+      StaticPenaltyLoss encourages motion; this loss encourages *smooth* motion.
+      They are mildly antagonistic — if both are active, keep
+      static_penalty_lambda relatively small to avoid the model introducing
+      jitter just to satisfy the "must move" pressure.
+    """
+
+    def get_name(self) -> str:
+        return "motion_smoothness"
+
+    def compute_loss(
+        self,
+        velocities: Dict[str, torch.Tensor],
+        inputs: Dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        """
+        Args:
+            velocities: must contain 'win'  [B, C, T, H, W]
+            inputs:     must contain 'scheduler', 'noisy_x_win', 'timestep'
+
+        Returns:
+            Scalar smoothness penalty (positive → optimizer minimises it,
+            driving the model toward smoother motion).
+        """
+        v_pred = velocities["win"]  # [B, C, T, H, W]
+        x_clean = self._reconstruct_clean_sample(
+            inputs["scheduler"],
+            inputs["noisy_x_win"],
+            v_pred,
+            inputs["timestep"],
+        )
+
+        T = x_clean.size(2)
+
+        if T < 3:
+            # Need at least 3 frames for second-order differences
+            return torch.tensor(0.0, device=x_clean.device)
+
+        # ── First-order temporal differences: inter-frame motion ─────────────
+        # [B, C, T-1, H, W]
+        first_diff = x_clean[:, :, 1:, :, :] - x_clean[:, :, :-1, :, :]
+
+        # ── Primary component: second-order differences (acceleration) ────────
+        # [B, C, T-2, H, W]  →  mean squared acceleration across all dims
+        second_diff = first_diff[:, :, 1:, :, :] - first_diff[:, :, :-1, :, :]
+        acceleration_penalty = torch.mean(second_diff ** 2)
+
+        # ── Secondary component: variance of per-frame motion energy ──────────
+        # Per-frame motion energy: mean over spatial dims → [B, C, T-1]
+        first_diff_energy = first_diff.pow(2).mean(dim=[3, 4])
+        # Variance over time → high variance = inconsistent motion speed
+        motion_speed_var = torch.var(first_diff_energy, dim=2, unbiased=False)  # [B, C]
+        speed_consistency_penalty = torch.mean(motion_speed_var)
+
+        # Combined penalty (80% acceleration + 20% speed consistency)
+        # Acceleration is the stronger perceptual signal for stuttering
+        penalty = 0.8 * acceleration_penalty + 0.2 * speed_consistency_penalty
+
+        return penalty
 
 
 class BaseLossStrategy(ABC):
@@ -208,17 +287,27 @@ class DPOLossStrategy(BaseLossStrategy):
         return base_loss, base_metrics
 
 
-def create_loss_strategy(strategy: str, beta: float = 500, static_penalty_lambda: float = 0.0, 
-                        inlier_regression_lambda: float = 0.0, inlier_model_path: Optional[str] = None) -> BaseLossStrategy:
+def create_loss_strategy(
+    strategy: str,
+    beta: float = 500,
+    static_penalty_lambda: float = 0.0,
+    motion_smoothness_lambda: float = 0.0,
+    inlier_regression_lambda: float = 0.0,
+    inlier_model_path: Optional[str] = None,
+) -> BaseLossStrategy:
     """Factory function to create the appropriate loss strategy with auxiliary losses
-    
+
     Args:
         strategy: One of 'sft', 'dro', or 'dpo'
         beta: Beta parameter for DPO loss (default: 500)
         static_penalty_lambda: Weight for static penalty term (default: 0.0)
+        motion_smoothness_lambda: Weight for motion smoothness penalty (default: 0.0).
+            Penalises second-order temporal differences (acceleration / jitter) in
+            reconstructed clean frames.  Start around 0.1–1.0 and tune based on
+            the logged `motion_smoothness` metric relative to the main loss.
         inlier_regression_lambda: Deprecated, not used
         inlier_model_path: Deprecated, not used
-    
+
     Returns:
         An instance of the appropriate loss strategy
     """
@@ -226,6 +315,9 @@ def create_loss_strategy(strategy: str, beta: float = 500, static_penalty_lambda
     
     if static_penalty_lambda > 0:
         auxiliary_losses.append(StaticPenaltyLoss(weight=static_penalty_lambda))
+
+    if motion_smoothness_lambda > 0:
+        auxiliary_losses.append(MotionSmoothnessLoss(weight=motion_smoothness_lambda))
     
     strategies = {
         'sft': lambda: SFTLossStrategy(auxiliary_losses=auxiliary_losses),
@@ -236,4 +328,4 @@ def create_loss_strategy(strategy: str, beta: float = 500, static_penalty_lambda
     if strategy not in strategies:
         raise ValueError(f"Unknown strategy: {strategy}. Must be one of {list(strategies.keys())}")
     
-    return strategies[strategy]() 
+    return strategies[strategy]()
