@@ -8,6 +8,7 @@ training:
   max_steps: 10000
   train_strategy: dpo
   static_penalty_lambda: 0.0
+  motion_smoothness_lambda: 0.0
   inlier_regression_lambda: 0.0
   gradient_clip_val: 1.0
   gradient_clip_algorithm: "norm"

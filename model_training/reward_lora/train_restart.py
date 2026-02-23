@@ -40,6 +40,7 @@ class TrainingConfig:
     max_steps: int = 20000
     train_strategy: str = 'dpo'
     static_penalty_lambda: float = 0.0
+    motion_smoothness_lambda: float = 0.0
     inlier_regression_lambda: float = 0.0
     gradient_clip_val: float = 1.0
     gradient_clip_algorithm: str = "norm"
@@ -91,6 +92,7 @@ class FlowDPOTrainer(pl.LightningModule):
             strategy=config.training.train_strategy,
             beta=config.training.beta,
             static_penalty_lambda=config.training.static_penalty_lambda,
+            motion_smoothness_lambda=config.training.motion_smoothness_lambda,
             inlier_regression_lambda=config.training.inlier_regression_lambda,
             inlier_model_path=config.model.inlier_regression_path
         )
