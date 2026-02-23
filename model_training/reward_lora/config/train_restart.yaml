@@ -11,8 +11,6 @@ training:
   inlier_regression_lambda: 0.0
   gradient_clip_val: 1.0
   gradient_clip_algorithm: "norm"
-  sft_warmup_steps: 500
-  sft_learning_rate: 5e-5
 
 lora:
   rank: 64
@@ -31,6 +29,7 @@ logging:
 
 model:
   dit_path: /path/to/wan/model/diffusion_pytorch_model.safetensors
+  sft_lora_path: "/path/to/sft/lora"
   pretrained_lora_path: null
   inlier_regression_path: null
 
