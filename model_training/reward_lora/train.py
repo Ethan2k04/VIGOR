@@ -71,11 +71,11 @@ class DataConfig:
 
 @dataclass
 class RewardTrainerConfig:
-    training: TrainingConfig = TrainingConfig()
-    lora: LoraTrainConfig = LoraTrainConfig()
-    logging: LoggingConfig = LoggingConfig()
-    model: ModelConfig = ModelConfig()
-    data: DataConfig = DataConfig()
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+    lora: LoraTrainConfig = field(default_factory=LoraTrainConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    data: DataConfig = field(default_factory=DataConfig)
 
 
 class FlowDPOTrainer(pl.LightningModule):

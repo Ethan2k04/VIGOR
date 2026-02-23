@@ -81,11 +81,11 @@ class DataConfig:
 
 @dataclass
 class RewardTrainerConfig:
-    training: TrainingConfig = TrainingConfig()
-    lora: LoraTrainConfig = LoraTrainConfig()
-    logging: LoggingConfig = LoggingConfig()
-    model: ModelConfig = ModelConfig()
-    data: DataConfig = DataConfig()
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+    lora: LoraTrainConfig = field(default_factory=LoraTrainConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    data: DataConfig = field(default_factory=DataConfig)
 
 
 class FlowDPOTrainer(pl.LightningModule):
@@ -228,10 +228,11 @@ class FlowDPOTrainer(pl.LightningModule):
             device=self.device, dtype=self.pipe.torch_dtype
         )
 
-        noisy_x_win = self.pipe.scheduler.add_noise(inputs['x_win'], noise, timestep)
-        velocity_win = self.pipe.scheduler.training_target(inputs['x_win'], noise, timestep)
-        noisy_x_lose = self.pipe.scheduler.add_noise(inputs['x_lose'], noise, timestep)
-        velocity_lose = self.pipe.scheduler.training_target(inputs['x_lose'], noise, timestep)
+        timestep_for_model = timestep[0].view(1)
+        noisy_x_win = self.pipe.scheduler.add_noise(inputs['x_win'], noise, timestep[0])
+        velocity_win = self.pipe.scheduler.training_target(inputs['x_win'], noise, timestep[0])
+        noisy_x_lose = self.pipe.scheduler.add_noise(inputs['x_lose'], noise, timestep[0])
+        velocity_lose = self.pipe.scheduler.training_target(inputs['x_lose'], noise, timestep[0])
 
         # ── Phase 1: SFT warm-up ───────────────────────────────────────
         if self.in_sft_phase:
@@ -239,7 +240,7 @@ class FlowDPOTrainer(pl.LightningModule):
                 velocity_win_pred = self.forward_model(
                     self.peft_model,
                     noisy_x_win,
-                    timestep,
+                    timestep_for_model,
                     inputs["prompt_emb_win"],
                     inputs["image_emb_win"],
                 )
@@ -258,7 +259,7 @@ class FlowDPOTrainer(pl.LightningModule):
                 {   # SFT strategy doesn't use inputs dict, but pass for aux compat
                     "noisy_x_win": noisy_x_win,
                     "noisy_x_lose": noisy_x_lose,
-                    "timestep": timestep,
+                    "timestep": timestep_for_model,
                     "scheduler": self.pipe.scheduler,
                     **{k: inputs[k] for k in ("prompt_emb_win", "prompt_emb_lose",
                                                "image_emb_win", "image_emb_lose")},
@@ -278,14 +279,14 @@ class FlowDPOTrainer(pl.LightningModule):
                 velocity_win_pred = self.forward_model(
                     self.peft_model,
                     noisy_x_win,
-                    timestep,
+                    timestep_for_model,
                     inputs["prompt_emb_win"],
                     inputs["image_emb_win"],
                 )
                 velocity_lose_pred = self.forward_model(
                     self.peft_model,
                     noisy_x_lose,
-                    timestep,
+                    timestep_for_model,
                     inputs["prompt_emb_lose"],
                     inputs["image_emb_lose"],
                 )
@@ -296,14 +297,14 @@ class FlowDPOTrainer(pl.LightningModule):
                 velocity_ref_win_pred = self.forward_model(
                     self.peft_model,
                     noisy_x_win,
-                    timestep,
+                    timestep_for_model,
                     inputs["prompt_emb_win"],
                     inputs["image_emb_win"],
                 )
                 velocity_ref_lose_pred = self.forward_model(
                     self.peft_model,
                     noisy_x_lose,
-                    timestep,
+                    timestep_for_model,
                     inputs["prompt_emb_lose"],
                     inputs["image_emb_lose"],
                 )
@@ -322,7 +323,7 @@ class FlowDPOTrainer(pl.LightningModule):
                 {
                     "noisy_x_win": noisy_x_win,
                     "noisy_x_lose": noisy_x_lose,
-                    "timestep": timestep,
+                    "timestep": timestep_for_model,
                     "scheduler": self.pipe.scheduler,
                     **{k: inputs[k] for k in ("prompt_emb_win", "prompt_emb_lose",
                                                "image_emb_win", "image_emb_lose")},
@@ -330,7 +331,7 @@ class FlowDPOTrainer(pl.LightningModule):
             )
             self.log("phase", 1.0, prog_bar=True)
 
-        loss = loss_output.loss * self.pipe.scheduler.training_weight(timestep)
+        loss = loss_output.loss * self.pipe.scheduler.training_weight(timestep_for_model)
 
         self.log("train_loss", loss, prog_bar=True)
         self.log("win_metric", m_win, prog_bar=False)
