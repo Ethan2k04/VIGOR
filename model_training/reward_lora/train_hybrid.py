@@ -403,7 +403,7 @@ def get_experiment_name(base_name: str) -> str:
     return f"{base_name}_{timestamp}"
 
 
-@hydra.main(config_path="config", config_name="train_restart", version_base=None)
+@hydra.main(config_path="config", config_name="train_hybrid", version_base=None)
 def train(config: RewardTrainerConfig):
     import warnings
     warnings.filterwarnings("ignore", message=".*AccumulateGrad.*stream.*")
