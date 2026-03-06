@@ -4,7 +4,7 @@
 
 ## Overview
 
-<img width="3175" height="1652" alt="overview" src="https://github.com/user-attachments/assets/194ee46d-969b-4bb9-b03f-ec53ffb96d12" />
+![overview](figure/overview.png)
 
 ## Installation
 
