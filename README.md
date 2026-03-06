@@ -1,4 +1,4 @@
-# Aligning Video Diffusion Models with Visual Geometry-Based Reward (ECCV 2026)
+# VIGOR: VIdeo Geometry-Oriented Reward for Temporal Generative Alignment (ECCV 2026)
 
 ## News
 
