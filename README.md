@@ -1,4 +1,4 @@
-# VIGOR: VIdeo Geometry-Oriented Reward for Temporal Generative Alignment (ECCV 2026)
+# VIGOR: VIdeo Geometry-Oriented Reward for Temporal Generative Alignment
 
 ## News
 
