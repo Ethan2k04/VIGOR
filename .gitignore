@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Environments
+.venv/
+venv/
+env/
+.python-version
+
+# Generated outputs
+outputs/
+*.log
+
+# Datasets / caches / weights (downloaded, not tracked)
+dpo/model_training/ms_dataset_cache/
+dpo/model_training/input_latent/
+*.onnx
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/

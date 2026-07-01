@@ -1,0 +1,49 @@
+# VIGOR — project dependencies
+#
+# Install the third_party backends FIRST (they provide torch / torchvision /
+# numpy, which VGGT and Causal-Forcing pin to specific versions), then this file.
+# See the README "Install dependencies" section:
+#
+#   pip install -r third_party/vggt/requirements.txt            # geometry reward + TTS scoring
+#   pip install -r third_party/Causal-Forcing/requirements.txt  # TTS autoregressive backbone
+#   pip install -r requirements.txt                             # this file
+#
+# torch / torchvision / numpy are intentionally omitted here so they are owned by
+# the third_party backends and not re-pinned to a conflicting version.
+
+# --- Core ---
+huggingface-hub>=0.26.1
+modelscope>=1.34.0
+transformers>=4.49.0
+Pillow>=9.0.0
+opencv-python>=4.5.0
+requests>=2.25.0
+tqdm>=4.60.0
+hydra-core>=1.3.0
+
+# --- Geometry reward (rewards/): reprojection / epipolar evaluators ---
+einops>=0.6.0
+safetensors>=0.3.0
+kornia>=0.6.0
+lpips>=0.1.4
+onnxruntime>=1.10.0
+scipy>=1.7.0
+
+# --- Wan2.1 generation backend (bon/ + dpo/ inference) ---
+accelerate==1.0.1
+peft==0.15.1
+diffusers==0.30.3
+sentencepiece==0.2.0
+diffsynth<2
+
+# --- DPO LoRA training (dpo/model_training/) ---
+fire==0.7.0
+lightning==2.5.1
+tensorboard==2.19.0
+setproctitle>=1.3.7
+
+# --- Optional ---
+# COLMAP support:
+#   pip install pycolmap==3.10.0 pyceres==2.3 "lightglue @ git+https://github.com/jytime/LightGlue.git"
+# Gradio 3D demo:
+#   pip install gradio==5.17.1 viser==0.2.23 trimesh>=3.9.0 matplotlib>=3.5.0

@@ -1,0 +1,50 @@
+data_path: "/path/to/original/videos"
+output_dir: "path/to/output"
+improved_captions_path: "improved_captions.json"
+num_samples_per_source: 300
+seed: 42
+split: "test"
+run_baseline: true
+run_lora: true
+overwrite: true
+model_path: "Wan2.1-T2V-1.3B"
+inlier_regression_path: null
+sources:
+  - "gb3dv25k"
+baseline_video_path: null
+
+# Common generation parameters
+image_to_video: false
+num_inference_steps: 50
+tiled: true
+width: 832
+height: 480
+num_frames: 81
+fps: 15
+quality: 5
+negative_prompt: ""
+
+evaluators:
+  - _target_: metrics.video_evaluation.EpipolarEvaluator
+    sampling_rate: 15
+    descriptor_type: "sift"
+  - _target_: metrics.video_evaluation.DynamicsEvaluator
+  - _target_: metrics.video_evaluation.PerspectiveEvaluator
+    classifier_path: "/path/to/perspective/classifier.pt"
+    sampling_rate: 1
+
+
+# Command-line overrides
+hydra:
+  run:
+    dir: ${output_dir}
+  job:
+    chdir: false
+
+# SFT LoRA path (the one fused into base during training)
+sft_lora_path: "path/to/sft/lora.ckpt"
+sft_lora_alpha: 1.0
+
+# New LoRA produced by DPO training
+lora_path: "path/to/dpo/lora.ckpt"
+lora_alpha: 1.0
