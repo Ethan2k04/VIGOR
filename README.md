@@ -219,7 +219,7 @@ If you find VIGOR useful in your research, please cite:
 ```bibtex
 @inproceedings{yin2026vigor,
   title     = {VIGOR: VIdeo Geometry-Oriented Reward for Temporal Generative Alignment},
-  author    = {Yin, Tengjiao and Shi, Jinglei and Guo, Heng and Wang, Xi},
+  author    = {Tengjiao Yin and Jinglei Shi and Heng Guo and Xi Wang},
   booktitle = {European Conference on Computer Vision (ECCV)},
   year      = {2026}
 }
